@@ -386,10 +386,10 @@ function genSample() {
   for (const [dt, q, p, fx] of [['2025-10-27', 30, 27.10, 1432], ['2026-01-26', 25, 27.90, 1445], ['2026-04-27', 25, 28.40, 1410], ['2026-07-27', 25, 28.90, 1395], ['2026-10-26', 25, 29.20, 1420]]) if (dt <= T) tr(dt, 'US', '슈왑 미국배당 SCHD', 'SCHD', 'buy', q, p, +(q * p * .0007).toFixed(2), fx);
   return d;
 }
-const emptyMine = () => ({ profile: { name: '', payday: 25, income: 0, budget: 0 }, settings: { costMethod: 'avg', fx: 1400, fxSource: 'auto' }, accounts: [], savings: [], fixed: [], tx: [], trades: [], prices: {} });
+const emptyMine = () => ({ profile: { name: '', payday: 25, income: 0, budget: 0 }, settings: { costMethod: 'avg', fx: 1400, fxSource: 'auto' }, accounts: [], savings: [], fixed: [], tx: [], trades: [], prices: {}, brokers: {} });
 
 /* ───────── 상태 ───────── */
-const S = { ws: 'sample', d: null, tab: 'home', month: null, edit: null, armed: null, ledFilter: null, txType: 'out', upload: null, confirmClear: false, taxYear: null, simKey: '', simQty: '', smsText: '', sms: null, smsSrc: 'sms', ocr: null };
+const S = { ws: 'sample', d: null, tab: 'home', month: null, edit: null, armed: null, ledFilter: null, txType: 'out', upload: null, confirmClear: false, taxYear: null, simKey: '', simQty: '', smsText: '', sms: null, smsSrc: 'sms', ocr: null, brk: {}, brkOpen: null };
 let SAMPLE = null;
 function loadWS(ws) {
   S.ws = ws;
@@ -523,8 +523,8 @@ function simulate(key, qty) {
   const q = Math.min(qty, h.qty), T = today(), y = Number(T.slice(0, 4));
   if (!h.price) return { err: '현재가를 먼저 넣어 주세요' };
   const fake = { id: '_sim', date: T, market: h.market, name: h.name, ticker: h.ticker || h.key, side: 'sell', qty: q, price: h.price, fee: 0, fx: Number(S.d.settings.fx) || 0 };
-  const after = book(S.d.trades.concat([fake])), r = after.realized.find(x => x.id === '_sim');
-  const t0 = taxFor(b.realized, y), t1 = taxFor(after.realized, y);
+  const after = book(S.d.trades.concat([fake])), r = after.realized.find(x => x.id === '_sim'), br = brokerRealized();
+  const t0 = taxFor(b.realized.concat(br), y), t1 = taxFor(after.realized.concat(br), y);
   let extra = 0, kind;
   if (h.market === 'US') { extra = t1.total - t0.total; kind = 'us'; }
   else if (h.market === 'KETF2') { extra = Math.max(0, Math.floor(r.gain * .154)); kind = 'etf'; }
@@ -534,7 +534,7 @@ function simulate(key, qty) {
 function netWorth() {
   const bank = sum(S.d.accounts.filter(a => a.kind === 'bank'), 'balance'), loan = sum(S.d.accounts.filter(a => a.kind === 'loan'), 'balance');
   const other = sum(S.d.accounts.filter(a => a.kind === 'asset'), 'balance'), sav = sum(S.d.savings, s => savCalc(s).paid);
-  const hs = book().holdings, stock = sum(hs, h => h.value ?? h.cost), assets = bank + sav + stock + other;
+  const hs = book().holdings, stock = sum(hs, h => h.value ?? h.cost) + sum(brokerHoldings(), 'valueKrw'), assets = bank + sav + stock + other;
   return { bank, loan, sav, stock, other, assets, net: assets - loan, priced: hs.every(h => h.value != null) };
 }
 
@@ -570,7 +570,7 @@ function vHome() {
   const bud = Number(S.d.profile.budget) || 0;
   if (bud) ins.push([ms.out > bud ? 'crit' : 'ok', ms.out > bud ? `예산을 ${won(ms.out - bud)}원 넘었어요` : `예산 ${man(bud)} 중 ${Math.round(ms.out / bud * 100)}% 썼어요`, `이번 달 지출 ${won(ms.out)}원 · 예산은 설정에서 바꿀 수 있어요`]);
   for (const s of S.d.savings) { const c = savCalc(s); if (!c.done && c.dday <= 31) ins.push(['ok', `${esc(s.name)} 만기 D-${c.dday}`, `${fmtD(c.end)}에 세후 ${won(c.total)}원을 받아요. 다시 넣을 곳을 미리 정해 두세요.`]); }
-  const y = Number(T.slice(0, 4)), tx = taxFor(book().realized, y);
+  const y = Number(T.slice(0, 4)), tx = taxFor(allRealized(), y);
   if (tx.fr.length) ins.push([tx.total ? 'warn' : 'ok', tx.total ? `올해 해외주식 양도세 약 ${won(tx.total)}원` : `올해 해외주식 양도세는 아직 없어요`, tx.total ? `${y + 1}년 5월 31일까지 신고·납부해요. <a href="#stocks">계산 보기</a>` : `기본공제 250만원 중 ${won(tx.remain)}원이 남았어요. <a href="#stocks">계산 보기</a>`]);
   const upcoming = fixedBetween(D.add(T, -1), D.add(D.lastDay(ym) > T ? D.lastDay(ym) : T, 1)).filter(x => x.d.startsWith(ym) && x.d >= T);
   const delta = (a, b, goodUp) => { if (!b) return ''; const df = a - b; if (!df) return '지난달과 같아요'; return `지난달보다 <span class="${(df > 0) === goodUp ? 'pos' : 'neg'}">${df > 0 ? '▲' : '▼'} ${man(Math.abs(df))}</span>`; };
@@ -768,10 +768,12 @@ function vSavings() {
 /* ───────── 화면: 주식 · 양도세 ───────── */
 function vStocks() {
   const el = $('#v-stocks'), b = book(), method = S.d.settings.costMethod, T = today(), cy = Number(T.slice(0, 4)), e = editing('trade');
-  const years = [...new Set(b.realized.map(r => r.year).concat([cy]))].sort((x, y) => y - x);
-  const yr = years.includes(S.taxYear) ? S.taxYear : cy, tx = taxFor(b.realized, yr);
+  const br = brokerRealized(), real = b.realized.concat(br), bh = brokerHoldings();
+  const years = [...new Set(real.map(r => r.year).concat([cy]))].sort((x, y) => y - x);
+  const yr = years.includes(S.taxYear) ? S.taxYear : cy, tx = taxFor(real, yr);
+  const overlap = br.some(r => r.year === yr) && b.realized.some(r => r.year === yr && r.market === 'US');
   const hs = b.holdings.slice().sort((a, c) => (c.value ?? c.cost) - (a.value ?? a.cost));
-  const val = sum(hs, h => h.value ?? h.cost), cost = sum(hs, 'cost'), pl = sum(hs.filter(h => h.pl != null), 'pl');
+  const val = sum(hs, h => h.value ?? h.cost) + sum(bh, 'valueKrw'), cost = sum(hs, 'cost') + sum(bh, h => h.valueKrw - h.plKrw), pl = sum(hs.filter(h => h.pl != null), 'pl') + sum(bh, 'plKrw');
   const sim = S.simKey ? simulate(S.simKey, parseAmt(S.simQty)) : null;
   const fxNow = Number(S.d.settings.fx) || 0;
   const trades = S.d.trades.slice().sort((a, c) => -byDate(a, c));
@@ -784,6 +786,7 @@ function vStocks() {
   ${fxNote() ? `<p class="meta">${fxNote()}</p>` : ''}
   ${S.ws === 'sample' ? '<p class="note">예시 시세예요. 실제 가격이 아니에요. 실시간 시세는 연결돼 있지 않아서 현재가는 직접 넣어 줘야 해요.</p>' : '<p class="note">실시간 시세는 연결돼 있지 않아요. 보유 종목 표의 현재가 칸에 가격을 넣어 주세요.</p>'}
   ${b.warnings.length ? `<p class="note warn">${b.warnings.map(esc).join('<br>')}</p>` : ''}
+  ${brokerCard()}
   <div class="kpis">
     ${kpi('평가액', man(val), `${hs.length}종목 · 산 돈 ${man(cost)}`)}
     ${kpi('평가손익', plTxt(pl, cost ? pl / cost * 100 : null), '아직 안 판 종목')}
@@ -793,6 +796,9 @@ function vStocks() {
   <div class="card"><div class="card-head"><h2>보유 종목</h2><span class="meta">${method === 'avg' ? '이동평균법' : '선입선출법'} 평균단가</span></div>
     ${hs.length ? table(['종목', '시장', '수량', '평균단가', '현재가', '평가액 (원)', '손익 (원)'], hs.map(h => [`${esc(h.name)}<span class="src">${esc(h.ticker || '')}</span>`, esc(MKT[h.market]?.l || ''), (+h.qty.toFixed(4)).toLocaleString('ko-KR'), h.cur === 'KRW' ? won(h.avg) : `$${h.avgF.toFixed(2)}<span class="src">${won(h.avg)}원</span>`, priceCell(h), h.value != null ? won(h.value) : '<span class="meta">–</span>', plTxt(h.pl, h.pl != null && h.cost ? h.pl / h.cost * 100 : null)]), [0, 0, 1, 1, 1, 1, 1], ['합계', '', '', '', '', won(val), plTxt(pl, null)]) : '<p class="meta">아래에서 산 주식을 거래 내역으로 넣으면 보유 종목이 계산돼요.</p>'}
   </div>
+  ${bh.length ? `<div class="card"><div class="card-head"><h2>증권사 계좌 보유 종목</h2><span class="meta">증권사에서 불러온 값 · 미국 주식은 현재 환율로 원화 환산</span></div>
+    ${table(['종목', '증권사', '수량', '평균단가', '현재가', '평가액 (원)', '손익 (원)'], bh.slice().sort((a, c) => c.valueKrw - a.valueKrw).map(h => [`${esc(h.name)}<span class="src">${esc(h.code)}</span>`, esc(BROKER_NAMES[h.broker] || h.broker), (+Number(h.qty).toFixed(4)).toLocaleString('ko-KR'), h.cur === 'USD' ? `$${Number(h.avg).toFixed(2)}` : won(h.avg), h.cur === 'USD' ? `$${Number(h.price).toFixed(2)}` : won(h.price), won(h.valueKrw), plTxt(h.plKrw, h.valueKrw - h.plKrw ? h.plKrw / (h.valueKrw - h.plKrw) * 100 : null)]), [0, 0, 1, 1, 1, 1, 1], ['합계', '', '', '', '', won(sum(bh, 'valueKrw')), plTxt(sum(bh, 'plKrw'), null)])}
+  </div>` : ''}
   <div class="grid-wide">
     <div class="card"><div class="card-head"><h2>해외주식 양도소득세</h2><label class="mon" for="tax-year">연도 <select id="tax-year">${years.map(y => `<option value="${y}"${y === yr ? ' selected' : ''}>${y}년</option>`).join('')}</select></label></div>
       <div class="taxrows">
@@ -806,7 +812,8 @@ function vStocks() {
         <div class="total"><span>낼 세금 (22%)</span><span class="num">${won(tx.total)}원</span></div>
       </div>
       <p class="meta" style="margin-top:10px">신고·납부: ${yr + 1}년 5월 1일~31일 홈택스 양도소득세 확정신고. 이익이 250만원 이하라도 신고는 해 두는 게 좋아요. 해외 상장 ETF도 여기 포함돼요.</p>
-      ${tx.fr.length ? `<details class="help" style="margin-top:10px"><summary>매도 ${tx.fr.length}건 계산 보기</summary>${table(['매도일', '종목', '수량', '양도가액', '취득가액', '양도차익'], tx.fr.map(r => [fmtDs(r.date), esc(r.name), r.qty, won(r.proceeds), won(r.basis), `<span class="${plCls(r.gain)}">${signWon(r.gain)}</span>`]), [0, 0, 1, 1, 1, 1])}<p class="meta">양도가액·취득가액은 거래마다 넣은 환율로 원화로 바꾸고 수수료를 뺀 금액이에요.</p></details>` : ''}
+      ${tx.fr.length ? `<details class="help" style="margin-top:10px"><summary>매도 ${tx.fr.length}건 계산 보기</summary>${table(['매도일', '종목', '수량', '양도가액', '취득가액', '양도차익'], tx.fr.map(r => [fmtDs(r.date), esc(r.name) + (r.broker ? `<span class="src">${esc(BROKER_NAMES[r.broker] || r.broker)}</span>` : ''), r.qty, r.proceeds == null ? '<span class="meta">증권사 계산</span>' : won(r.proceeds), r.basis == null ? '<span class="meta">증권사 계산</span>' : won(r.basis), `<span class="${plCls(r.gain)}">${signWon(r.gain)}</span>`]), [0, 0, 1, 1, 1, 1])}<p class="meta">직접 넣은 거래는 거래마다 넣은 환율로 원화로 바꾸고 수수료를 뺀 금액이에요. 증권사에서 불러온 매도는 증권사가 계산한 원화 손익이에요.</p></details>` : ''}
+      ${overlap ? '<p class="note warn" style="margin-top:10px">이 해에 직접 넣은 해외 매도와 증권사에서 불러온 매도가 둘 다 있어요. 같은 매도를 두 번 넣었다면 직접 넣은 거래를 지워 주세요. 세금이 두 번 계산돼요.</p>' : ''}
       <div class="btns" style="margin-top:12px"><button type="button" class="btn" data-act="dl-tax">${yr}년 매도 내역 엑셀 받기</button></div>
     </div>
     <div class="stack">
@@ -1198,10 +1205,10 @@ function dlLedger() {
 }
 function dlTax() {
   if (!hasX()) { toast('엑셀 도구를 불러오지 못했어요. 새로고침해 주세요'); return; }
-  const b = book(), y = S.taxYear || Number(today().slice(0, 4)), tx = taxFor(b.realized, y);
+  const y = S.taxYear || Number(today().slice(0, 4)), tx = taxFor(allRealized(), y);
   if (!tx.r.length) { toast(`${y}년에는 판 기록이 없어요`); return; }
-  const aoa = [[`${y}년 주식 매도 내역 (${S.d.settings.costMethod === 'fifo' ? '선입선출법' : '이동평균법'})`], [], ['매도일', '종목', '코드', '시장', '수량', '양도가액(원)', '취득가액(원)', '양도차익(원)', '증권거래세 추정(원)']];
-  for (const r of tx.r) aoa.push([r.date, r.name, S.d.trades.find(t => t.id === r.id)?.ticker || '', MKT[r.market]?.l || '', r.qty, Math.round(r.proceeds), Math.round(r.basis), Math.round(r.gain), r.stt]);
+  const aoa = [[`${y}년 주식 매도 내역 (직접 넣은 거래: ${S.d.settings.costMethod === 'fifo' ? '선입선출법' : '이동평균법'}, 증권사 불러온 매도: 증권사 계산)`], [], ['매도일', '종목', '코드', '시장', '수량', '양도가액(원)', '취득가액(원)', '양도차익(원)', '증권거래세 추정(원)', '출처']];
+  for (const r of tx.r) aoa.push([r.date, r.name, r.broker ? r.code : (S.d.trades.find(t => t.id === r.id)?.ticker || ''), MKT[r.market]?.l || '', r.qty, r.proceeds == null ? '' : Math.round(r.proceeds), r.basis == null ? '' : Math.round(r.basis), Math.round(r.gain), r.stt || 0, r.broker ? (BROKER_NAMES[r.broker] || r.broker) : '직접 입력']);
   aoa.push([], ['해외주식 손익 통산', '', '', '', '', '', '', Math.round(tx.net)], ['기본공제', '', '', '', '', '', '', -tx.ded], ['과세표준', '', '', '', '', '', '', tx.base], ['양도소득세 20%', '', '', '', '', '', '', tx.cgt], ['지방소득세', '', '', '', '', '', '', tx.local], ['합계', '', '', '', '', '', '', tx.total]);
   saveFile(`주식양도세_${y}.xlsx`, xlsxBuf('양도세', aoa, [11, 18, 9, 18, 6, 14, 14, 14, 14]));
 }
@@ -1297,6 +1304,7 @@ function mergeDocs(a, b) { // a = 서버, b = 이 기기. 같은 기록은 나�
   out.prices = { ...(a.prices || {}) }; for (const [t, p] of Object.entries(b.prices || {})) { const q = out.prices[t]; if (!q || (p.t || 0) >= (q.t || 0)) out.prices[t] = p; }
   for (const t of Object.keys(out.prices)) if (del['price:' + t] && del['price:' + t] >= (out.prices[t].t || 0)) delete out.prices[t];
   for (const k of ['profile', 'settings']) out[k] = ((b[k] && b[k].mt) || 0) >= ((a[k] && a[k].mt) || 0) ? b[k] : a[k];
+  out.brokers = { ...(a.brokers || {}) }; for (const [id, v] of Object.entries(b.brokers || {})) { const w = out.brokers[id]; if (!w || ((v && v.at) || 0) >= ((w && w.at) || 0)) out.brokers[id] = v; }
   return out;
 }
 function normalizeDoc(d) { const e = emptyMine(); for (const k of Object.keys(e)) if (d[k] == null) d[k] = e[k]; return d; }
@@ -1417,6 +1425,74 @@ document.addEventListener('visibilitychange', () => {
   else if (Date.now() - pullAt > 20000) syncPull();
 });
 
+/* ───────── 증권사 연결 (모듈: household/brokers/<id>.js, 약속은 brokers/README.md) ───────── */
+const BROKER_BASE = 'https://converseddululu.github.io/moa-money/household/brokers/';
+const BROKER_NAMES = { kis: '한국투자증권', kiwoom: '키움증권', toss: '토스증권' };
+const BROKER_VER = '1';
+window.MoaBrokers = window.MoaBrokers || { list: [] };
+window.MoaBrokers.register = function (m) { if (m && m.id && !this.list.some(x => x.id === m.id)) { this.list.push(m); if (S.d && S.tab === 'stocks') render(); } };
+const brkMod = id => window.MoaBrokers.list.find(x => x.id === id);
+const brkCfg = id => LS.get(K('broker:' + id), {}) || {};
+const brkReady = id => { const m = brkMod(id), c = brkCfg(id); return !!(m && m.fields.filter(f => !f.optional).every(f => String(c[f.key] || '').trim())); };
+const brkData = () => Object.entries((S.d && S.d.brokers) || {}).filter(([, v]) => v && !v.removed);
+function brokerHoldings() {
+  const fx = Number(S.d.settings.fx) || 0, out = [];
+  for (const [id, b] of brkData()) for (const h of [...(b.kr || []), ...(b.us || [])]) { const r = h.cur === 'USD' ? fx : 1; out.push({ ...h, broker: id, valueKrw: (Number(h.value) || 0) * r, plKrw: (Number(h.pl) || 0) * r }); }
+  return out;
+}
+function brokerRealized() {
+  const out = [];
+  for (const [id, b] of brkData()) for (const [y, list] of Object.entries(b.realized || {})) for (const r of list || []) out.push({ ...r, id: `${id}:${r.date}:${r.code}:${r.qty}:${r.gain}`, year: Number(y), market: 'US', broker: id, name: r.name || r.code, gain: Number(r.gain) || 0 });
+  return out;
+}
+const allRealized = () => book().realized.concat(brokerRealized());
+function loadBrokers() { if (IN_CLAUDE) return; for (const id of Object.keys(BROKER_NAMES)) loadScript(BROKER_BASE + id + '.js?v=' + BROKER_VER).catch(() => {}); }
+async function brokerRefresh(id) {
+  const m = brkMod(id); if (!m) return;
+  if (S.ws !== 'mine') { toast("증권사 연결은 '내 가계부'에서 쓸 수 있어요"); return; }
+  if (S.brk[id] && S.brk[id].busy) return;
+  const cfg = brkCfg(id);
+  S.brk[id] = { busy: true, msg: '불러오는 중…' }; render();
+  const ctx = {
+    relay: SYNC_API.replace(/v1\/$/, ''), fx: Number(S.d.settings.fx) || 0, today,
+    saveCfg: c => LS.set(K('broker:' + id), c),
+    progress: t => { if (S.brk[id]) S.brk[id].msg = t; const el = $('#brk-msg-' + id); if (el) el.textContent = t; }
+  };
+  try {
+    const r = await m.refresh(cfg, ctx);
+    S.d.brokers = S.d.brokers || {};
+    S.d.brokers[id] = { at: Date.now(), kr: r.kr || [], us: r.us || [], realized: r.realized || {}, warn: r.warn || [] };
+    if (m.quote) {
+      const items = book().holdings.map(h => ({ key: h.key, market: (MKT[h.market] || MKT.US).cur === 'KRW' ? 'KR' : 'US', code: String(h.ticker || h.key), ex: S.d.prices[h.key] && S.d.prices[h.key].ex })).filter(i => /^[0-9A-Za-z.]+$/.test(i.code));
+      if (items.length) { ctx.progress('직접 넣은 종목 현재가 불러오는 중…'); const q = await m.quote(cfg, ctx, items); for (const [k, v] of Object.entries(q || {})) if (v && v.price > 0) S.d.prices[k] = { price: v.price, at: today(), ex: v.ex }; }
+    }
+    save(); S.brk[id] = null; toast(`${m.name}에서 불러왔어요`);
+  } catch (e) { S.brk[id] = { busy: false, err: (e && e.message) || '불러오지 못했어요' }; toast(S.brk[id].err); }
+  render();
+}
+function brokerCard() {
+  if (IN_CLAUDE) return '<div class="card"><h2>증권사 연결</h2><p class="meta" style="margin-top:8px">증권사 연결은 GitHub 웹사이트 버전에서 쓸 수 있어요.</p></div>';
+  const rows = Object.entries(BROKER_NAMES).map(([id, name]) => {
+    const m = brkMod(id), d = (S.d.brokers || {})[id], st = S.brk[id], on = brkReady(id), open = S.brkOpen === id;
+    const when = d && !d.removed && d.at ? `${new Date(d.at).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })} 불러옴` : '';
+    const head = `<div class="li" style="grid-template-columns:minmax(0,1fr) auto"><span><b>${esc(name)}</b> ${!m ? '<span class="chip muted">준비 중</span>' : on ? `<span class="chip ok">연결됨</span> <span class="meta">${esc(when)}</span>` : '<span class="chip muted">연결 안 됨</span>'}</span>
+      <span class="btns">${!m ? '' : on ? `<button type="button" class="btn sm primary" data-act="brk-refresh" data-id="${id}"${st && st.busy ? ' disabled' : ''}>${st && st.busy ? '불러오는 중…' : '불러오기'}</button><button type="button" class="link-btn" data-act="brk-open" data-id="${id}">설정</button>` : `<button type="button" class="btn sm" data-act="brk-open" data-id="${id}">연결하기</button>`}</span></div>`;
+    const msg = st && st.busy ? `<p class="note" id="brk-msg-${id}" role="status">${esc(st.msg || '')}</p>` : st && st.err ? `<p class="note warn">${esc(st.err)}</p>` : '';
+    const warn = d && !d.removed && d.warn && d.warn.length ? `<p class="meta">${d.warn.map(esc).join('<br>')}</p>` : '';
+    const cfg = brkCfg(id);
+    const form = open && m ? `<form class="form" data-form="broker" style="margin:8px 0 12px">
+        <input type="hidden" name="id" value="${id}">
+        <div style="grid-column:1/-1" class="help">${m.help || ''}</div>
+        ${m.fields.map(f => `<label>${esc(f.label)}<input id="brk-${id}-${esc(f.key)}" name="${esc(f.key)}" ${f.secret ? 'type="password"' : ''} value="${esc(cfg[f.key] || '')}" placeholder="${esc(f.placeholder || '')}" autocomplete="off"${f.optional ? '' : ' required'}></label>`).join('')}
+        <p class="meta" style="grid-column:1/-1">${esc(m.notes || '')} 키는 이 기기 브라우저에만 저장되고, 동기화·백업 파일에는 들어가지 않아요.</p>
+        <div class="form-actions"><button type="submit" class="btn primary">저장하고 불러오기</button><button type="button" class="btn" data-act="brk-open" data-id="${id}">닫기</button>${on ? (S.armed === 'brk:' + id ? `<button type="button" class="link-btn danger" data-act="brk-off" data-id="${id}">정말 연결을 끊을까요?</button>` : `<button type="button" class="link-btn danger" data-act="brk-off" data-id="${id}">연결 끊기</button>`) : ''}</div>
+      </form>` : '';
+    return head + msg + warn + form;
+  }).join('');
+  return `<div class="card" id="broker-card"><div class="card-head"><h2>증권사 연결</h2><span class="meta">조회만 해요. 주문은 하지 않아요</span></div>
+    ${S.ws !== 'mine' ? `<p class="note">증권사 연결은 '내 가계부'에서 쓸 수 있어요. <button type="button" class="link-btn" data-ws="mine">내 가계부로 바꾸기</button></p>` : `<div class="list">${rows}</div>`}</div>`;
+}
+
 /* ───────── 저장 폼 ───────── */
 const FORMS = {
   tx(v) {
@@ -1451,7 +1527,17 @@ const FORMS = {
     Object.assign(S.d.profile, { name: v.name.trim(), payday: Math.min(31, Math.max(1, Number(v.payday) || 25)), income: parseAmt(v.income), budget: parseAmt(v.budget) });
     return '저장했어요';
   },
-  sim(v) { S.simKey = v.key; S.simQty = v.qty; return null; }
+  sim(v) { S.simKey = v.key; S.simQty = v.qty; return null; },
+  broker(v) {
+    const id = v.id, m = brkMod(id); if (!m) return null;
+    const old = brkCfg(id), cfg = {};
+    for (const f of m.fields) cfg[f.key] = String(v[f.key] || '').trim();
+    if (m.fields.some(f => !f.optional && !cfg[f.key])) return '필요한 칸을 모두 넣어 주세요';
+    const same = m.fields.every(f => (old[f.key] || '') === cfg[f.key]);
+    LS.set(K('broker:' + id), same ? { ...old, ...cfg } : cfg);   // 키가 바뀌면 저장해 둔 토큰은 버려요
+    S.brkOpen = null; setTimeout(() => brokerRefresh(id), 0);
+    return null;
+  }
 };
 const COLL = { tx: 'tx', fixed: 'fixed', sav: 'savings', acct: 'accounts', trade: 'trades' };
 function upsert(coll, id, obj) { const arr = S.d[coll]; if (id) { const i = arr.findIndex(x => x.id === id); if (i >= 0) { arr[i] = { ...arr[i], ...obj }; return; } } arr.push({ id: uid(coll[0]), ...obj }); }
@@ -1493,6 +1579,14 @@ document.addEventListener('click', e => {
     'sms-clear': () => { S.smsText = ''; S.sms = null; render(); },
     'sms-cancel': () => { S.sms = null; render(); },
     'sms-commit': commitSms,
+    'brk-open': () => { S.brkOpen = S.brkOpen === b.dataset.id ? null : b.dataset.id; render(); },
+    'brk-refresh': () => brokerRefresh(b.dataset.id),
+    'brk-off': () => {
+      const id = b.dataset.id;
+      if (S.armed !== 'brk:' + id) { S.armed = 'brk:' + id; render(); return; }
+      S.armed = null; LS.del(K('broker:' + id)); S.d.brokers = S.d.brokers || {}; S.d.brokers[id] = { at: Date.now(), removed: true }; S.brkOpen = null; save();
+      toast(`${BROKER_NAMES[id]} 연결을 끊었어요. 이 기기에서 키를 지웠어요`); render();
+    },
     'up-commit': commitUpload, 'up-cancel': () => { S.upload = null; render(); },
     clear: () => { S.confirmClear = true; render(); }, 'clear-no': () => { S.confirmClear = false; render(); },
     'clear-yes': () => { syncOff(); LS.del(K('mine')); S.confirmClear = false; if (S.ws === 'mine') loadWS('mine'); toast('이 기기의 내 가계부를 지웠어요. 동기화도 이 기기에서 껐어요'); render(); },
@@ -1548,7 +1642,7 @@ window.addEventListener('hashchange', () => { if (location.hash.startsWith('#syn
 function init() {
   loadWS(LS.get(K('ws'), 'sample') === 'mine' ? 'mine' : 'sample');
   const h = location.hash.slice(1); S.tab = VIEWS.includes(h) ? h : 'home';
-  render(); maybeAutoFx(); syncInit();
+  render(); maybeAutoFx(); syncInit(); loadBrokers();
 }
 if (!window.__MOA_TEST__) init();
 </script>

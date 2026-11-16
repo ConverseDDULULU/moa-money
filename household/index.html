@@ -82,6 +82,7 @@ main.wrap{padding-block:22px 80px}
 :where(button,a,select,input,summary,label.btn):focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 select,input{font:inherit;color:var(--ink);background:var(--surface);border:1px solid var(--line-2);border-radius:7px;padding:6px 10px;min-width:0;max-width:100%}
 input[type="checkbox"]{width:16px;height:16px;accent-color:var(--accent)}
+.quick{display:flex;align-items:center;gap:10px 12px;flex-wrap:wrap;padding:12px 16px}
 textarea{display:block;width:100%;min-height:120px;resize:vertical;font:13px/1.55 var(--f-body);color:var(--ink);background:var(--surface);border:1px solid var(--line-2);border-radius:7px;padding:10px 12px}
 .seg{display:inline-flex;border:1px solid var(--line-2);border-radius:8px;padding:2px;background:var(--sunk)}
 .seg button{border:0;background:none;padding:5px 11px;border-radius:6px;font:inherit;font-size:13px;color:var(--ink-2);cursor:pointer;white-space:nowrap}
@@ -388,7 +389,7 @@ function genSample() {
 const emptyMine = () => ({ profile: { name: '', payday: 25, income: 0, budget: 0 }, settings: { costMethod: 'avg', fx: 1400, fxSource: 'auto' }, accounts: [], savings: [], fixed: [], tx: [], trades: [], prices: {} });
 
 /* ───────── 상태 ───────── */
-const S = { ws: 'sample', d: null, tab: 'home', month: null, edit: null, armed: null, ledFilter: null, txType: 'out', upload: null, confirmClear: false, taxYear: null, simKey: '', simQty: '' };
+const S = { ws: 'sample', d: null, tab: 'home', month: null, edit: null, armed: null, ledFilter: null, txType: 'out', upload: null, confirmClear: false, taxYear: null, simKey: '', simQty: '', smsText: '', sms: null, smsSrc: 'sms', ocr: null };
 let SAMPLE = null;
 function loadWS(ws) {
   S.ws = ws;
@@ -572,6 +573,7 @@ function vHome() {
     <div><div class="lab">순자산 ${S.ws === 'sample' ? '<span class="chip muted">예시 숫자</span>' : ''}</div><div class="big">${man(nw.net)}</div><p class="meta" style="margin-top:6px">통장 + 예적금(넣은 돈) + 주식(평가액) + 기타 자산 − 대출${nw.priced ? '' : ' · 현재가가 없는 주식은 산 가격으로 계산'}</p></div>
     ${mix}
   </div>
+  <div class="card quick"><b>빠른 기록</b>${IN_CLAUDE ? '' : '<label class="btn primary" for="ocr-file-home">캡처 올리기</label><input type="file" id="ocr-file-home" accept="image/*" multiple hidden>'}<a class="btn" href="#ledger">문자 붙여넣기 · 직접 쓰기</a><span class="meta">${IN_CLAUDE ? '카드 문자를 복사해서 이 화면에서 Ctrl+V 해도 돼요' : '문자나 캡처를 복사해서 이 화면에서 바로 Ctrl+V 해도 돼요'}</span></div>
   <div class="kpis">
     ${kpi(`${Number(ym.slice(5))}월 수입`, man(ms.inn), delta(ms.inn, pv.inn, true))}
     ${kpi(`${Number(ym.slice(5))}월 지출`, man(ms.out), delta(ms.out, pv.out, false))}
@@ -621,10 +623,12 @@ function vLedger() {
       ${formActions('tx', '기록하기')}
     </form>
   </div>
-  <div class="card" id="sms-card"><div class="card-head"><h2>카드 문자 붙여넣기</h2><span class="meta">승인 문자를 여러 개 한 번에 붙여넣으면 날짜·가게·금액을 읽어서 넣어요</span></div>
+  <div class="card" id="sms-card"><div class="card-head"><h2>빠른 기록</h2><span class="meta">${IN_CLAUDE ? '카드 문자를 붙여넣으면 바로 읽어요' : '캡처나 카드 문자를 넣으면 바로 읽어요 · 어느 화면에서든 Ctrl+V 해도 돼요'}</span></div>
+    ${IN_CLAUDE ? '' : `<div class="btns" style="margin-bottom:10px"><label class="btn primary" for="ocr-file">캡처 올리기</label><input type="file" id="ocr-file" accept="image/*" multiple hidden><span class="meta">은행·카드 앱 거래내역 화면 캡처를 여러 장 골라도 돼요. 창에 끌어다 놓아도 되고, 사진은 이 기기 밖으로 나가지 않아요.</span></div>`}
+    ${S.ocr ? `<p class="note" id="ocr-msg" role="status">${esc(S.ocr.msg)}</p>` : ''}
     <label class="sr" for="sms-text">카드 문자</label>
     <textarea id="sms-text" rows="5" placeholder="[Web발신]&#10;신한카드(1234)승인 김*수 6,100원(일시불)11/14 08:42 스타벅스 누적512,300원">${esc(S.smsText || '')}</textarea>
-    <div class="btns" style="margin-top:10px"><button type="button" class="btn primary" data-act="sms-read">문자 읽기</button><button type="button" class="btn" data-act="sms-example">예시 문자 넣어 보기</button>${S.smsText ? '<button type="button" class="link-btn" data-act="sms-clear">비우기</button>' : ''}</div>
+    <div class="btns" style="margin-top:10px"><button type="button" class="btn" data-act="sms-read">문자 다시 읽기</button><button type="button" class="btn" data-act="sms-example">예시 문자로 해 보기</button>${S.smsText ? '<button type="button" class="link-btn" data-act="sms-clear">비우기</button>' : ''}</div>
     ${S.sms ? smsPreview() : ''}
     <details class="help" style="margin-top:12px"><summary>문자는 어떻게 복사하나요?</summary><ul>
       <li><b>휴대폰에서 이 사이트를 열면 가장 편해요.</b> 문자 앱에서 카드사 대화방을 열고, 메시지를 길게 눌러 여러 개 선택한 뒤 복사해서 여기에 붙여넣으세요.</li>
@@ -1029,9 +1033,9 @@ function parseSmsOne(m) {
   const method = bank ? (issuer ? `${issuer} 계좌` : '계좌') : (issuer ? `${issuer}카드` : '카드');
   return { raw: m, date: date || T, noDate: !date, memo: memo || '(가게 이름 없음)', amount, type, cancel, foreign, method, cat: guessCat(memo, type) };
 }
-function readSms(text) {
-  const items = splitSms(text).map(parseSmsOne);
-  const key = t => [t.date, normKey(t.memo), t.amount, t.type].join('|'), cnt = new Map(), seen = new Map();
+function readSms(text) { return markStatus(splitSms(text).map(parseSmsOne)); }
+function markStatus(items) {
+  const key =t => [t.date, normKey(t.memo), t.amount, t.type].join('|'), cnt = new Map(), seen = new Map();
   for (const t of S.d.tx) cnt.set(key(t), (cnt.get(key(t)) || 0) + 1);
   const near = (a, b) => { const k1 = normKey(a), k2 = normKey(b); return k1 && k2 && (k1 === k2 || k1.includes(k2) || k2.includes(k1)); };
   const usedTx = new Set();
@@ -1051,16 +1055,111 @@ function readSms(text) {
 }
 const SMS_ST = { new: ['acc', '새 내역'], dup: ['muted', '이미 있음'], bad: ['crit', '못 읽음'], voided: ['muted', '취소됨'], 'cancel-batch': ['warn', '취소 (같이 붙여넣은 결제)'], 'cancel-tx': ['warn', '취소 → 결제 지움'], 'cancel-none': ['muted', '취소 (짝 없음)'] };
 function smsPreview() {
-  const items = S.sms || [], nNew = items.filter(i => i.status === 'new').length, nDel = items.filter(i => i.status === 'cancel-tx').length;
-  if (!items.length) return '<p class="note warn" style="margin-top:10px">읽을 문자를 찾지 못했어요. 카드사 승인 문자를 그대로 붙여넣어 주세요.</p>';
-  return `<div class="preview" style="margin-top:12px"><p><b>${items.length}개</b> 문자를 읽었어요 · 새 내역 ${nNew}건${nDel ? ` · 취소로 지울 결제 ${nDel}건` : ''}${S.ws === 'sample' ? ' · <span class="meta">지금은 예시 가계부에 들어가요(새로고침하면 사라져요)</span>' : ''}</p>
-    ${table(['상태', '날짜', '내용', '분류', '금액'], items.map((it, i) => [`<span class="chip ${SMS_ST[it.status][0]}">${SMS_ST[it.status][1]}</span>`, `${it.date}${it.noDate ? '<span class="src">날짜가 없어 오늘로</span>' : ''}`, `${esc(it.memo)}<span class="src">${esc(it.method)}${it.status === 'cancel-tx' ? ` · ${it.matchDate} 결제를 지워요` : ''}</span>`, it.status === 'new' ? `<select data-smscat="${i}" aria-label="${esc(it.memo)} 분류">${catOpts(it.type, it.cat)}</select>` : `<span class="meta">${esc(it.cat)}</span>`, it.amount ? `${it.type === 'in' ? '+' : '−'}${won(it.amount)}` : '<span class="meta">–</span>']), [0, 0, 0, 0, 1])}
+  const items = S.sms || [], ocr = S.smsSrc === 'ocr', take = items.filter(i => i.status === 'new' && !i.skip).length, nDel = items.filter(i => i.status === 'cancel-tx' && !i.skip).length;
+  if (!items.length) return `<p class="note warn" style="margin-top:10px">${ocr ? '캡처에서 금액이 있는 줄을 찾지 못했어요. 거래내역 목록이 잘 보이게 캡처해 주세요.' : '읽을 문자를 찾지 못했어요. 카드사 승인 문자를 그대로 붙여넣어 주세요.'}</p>`;
+  const unsure = items.some(i => i.unsure && i.status === 'new');
+  return `<div class="preview" style="margin-top:12px"><p>${ocr ? '캡처에서' : '문자에서'} <b>${items.length}건</b>을 읽었어요 · 넣을 내역 ${take}건${nDel ? ` · 취소로 지울 결제 ${nDel}건` : ''}${S.ws === 'sample' ? ' · <span class="meta">지금은 예시 가계부에 들어가요(새로고침하면 사라져요)</span>' : ''}</p>
+    ${ocr ? `<p class="meta">글자 인식이라 틀릴 수 있어요. 금액과 날짜를 한 번 훑어보고, 이상한 줄은 체크를 빼 주세요.${unsure ? ' <b>입금·출금이 화면에 안 적힌 줄은 구분을 골라 주세요.</b>' : ''}</p>` : ''}
+    ${table(['', '상태', '날짜', '내용', '구분 · 분류', '금액'], items.map((it, i) => {
+      const can = it.status === 'new' || it.status === 'cancel-tx';
+      const typeSel = it.status === 'new' && it.unsure ? `<select data-smstype="${i}" aria-label="${esc(it.memo)} 입금 출금">${[['out', '지출'], ['in', '수입'], ['save', '저축·투자']].map(([v, l]) => `<option value="${v}"${v === it.type ? ' selected' : ''}>${l}</option>`).join('')}</select> ` : '';
+      return [can ? `<input type="checkbox" data-smsinc="${i}" id="smsinc-${i}"${it.skip ? '' : ' checked'} aria-label="${esc(it.memo)} 넣기">` : '',
+        `<span class="chip ${SMS_ST[it.status][0]}">${SMS_ST[it.status][1]}</span>`,
+        `${it.date}${it.noDate ? '<span class="src">날짜를 못 찾아 오늘로</span>' : ''}`,
+        `${esc(it.memo)}<span class="src">${esc(it.method)}${it.status === 'cancel-tx' ? ` · ${it.matchDate} 결제를 지워요` : ''}</span>`,
+        it.status === 'new' ? `${typeSel}<select data-smscat="${i}" aria-label="${esc(it.memo)} 분류">${catOpts(it.type, it.cat)}</select>` : `<span class="meta">${esc(it.cat)}</span>`,
+        it.amount ? `${it.type === 'in' ? '+' : it.type === 'save' ? '→ ' : '−'}${won(it.amount)}` : '<span class="meta">–</span>'];
+    }), [0, 0, 0, 0, 0, 1])}
     ${items.some(i => i.foreign) ? `<p class="meta">해외 결제는 현재 환율(1달러 ${won(S.d.settings.fx)}원)로 바꾼 금액이에요. 실제 청구액은 카드 명세서에서 확인하세요.</p>` : ''}
-    <div class="btns"><button type="button" class="btn primary" data-act="sms-commit"${nNew + nDel ? '' : ' disabled'}>${nNew ? `${nNew}건 가계부에 넣기` : '넣을 새 내역 없음'}${nDel ? ` · ${nDel}건 지우기` : ''}</button><button type="button" class="btn" data-act="sms-cancel">취소</button></div></div>`;
+    <div class="btns"><button type="button" class="btn primary" data-act="sms-commit"${take + nDel ? '' : ' disabled'}>${take ? `${take}건 가계부에 넣기` : '넣을 새 내역 없음'}${nDel ? ` · ${nDel}건 지우기` : ''}</button><button type="button" class="btn" data-act="sms-cancel">취소</button></div></div>`;
 }
+/* ───────── 캡처 읽기 (브라우저 안 OCR, 사진은 기기 밖으로 안 나감) ───────── */
+const TESS_SRC = 'https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js';
+let tessWorker = null, ocrProg = null;
+function loadScript(src) { return new Promise((res, rej) => { const s = document.createElement('script'); s.src = src; s.onload = res; s.onerror = () => rej(new Error('load ' + src)); document.head.appendChild(s); }); }
+async function getWorker() {
+  if (tessWorker) return tessWorker;
+  if (!window.Tesseract) await loadScript(TESS_SRC);
+  tessWorker = await window.Tesseract.createWorker('kor+eng', 1, { logger: m => { if (m.status === 'recognizing text') { if (ocrProg) ocrProg(m.progress || 0); } else setOcrMsg('글자 인식 준비 중… (처음 한 번만 한국어 인식 데이터를 받아요)'); } });
+  return tessWorker;
+}
+async function prepImage(file) {
+  const bmp = await createImageBitmap(file), scale = Math.min(2.5, Math.max(1, 1800 / bmp.width));
+  const probe = document.createElement('canvas'); probe.width = 32; probe.height = 32;
+  const pg = probe.getContext('2d'); pg.drawImage(bmp, 0, 0, 32, 32);
+  const px = pg.getImageData(0, 0, 32, 32).data; let lum = 0; for (let i = 0; i < px.length; i += 4) lum += (px[i] * 299 + px[i + 1] * 587 + px[i + 2] * 114) / 1000;
+  const dark = lum / (px.length / 4) < 110;
+  const c = document.createElement('canvas'); c.width = Math.round(bmp.width * scale); c.height = Math.round(bmp.height * scale);
+  const g = c.getContext('2d'); g.filter = `grayscale(1)${dark ? ' invert(1)' : ''} contrast(1.2)`; g.drawImage(bmp, 0, 0, c.width, c.height);
+  return c;
+}
+function setOcrMsg(m) { if (!S.ocr) return; S.ocr.msg = m; const el = $('#ocr-msg'); if (el) el.textContent = m; }
+function normOcrLine(s) {
+  return String(s).replace(/[|¦]/g, ' ').replace(/(\d)\s*([,.])\s*(?=\d{3}\b)/g, '$1$2').replace(/(\d)\s+(?=원)/g, '$1').replace(/([가-힣])\s(?=[가-힣])/g, '$1').replace(/\s+/g, ' ').trim();
+}
+function findMoney(ln) {
+  const re = /([+\-−–])?\s?(\d{1,3}(?:[,.]\d{3})+|\d{4,9})\s*(원)?/g; let m;
+  while ((m = re.exec(ln))) {
+    let sign = m[1] ? (m[1] === '+' ? '+' : '-') : '';
+    if (sign && m.index > 0 && /\d/.test(ln[m.index - 1])) sign = '';
+    if (!sign && !m[3] && !/[,.]/.test(m[2])) continue;
+    if (!m[3] && !sign && /^(19|20)\d{2}$/.test(m[2])) continue;
+    const v = Number(m[2].replace(/[,.]/g, '')); if (!(v > 0) || v > 1e10) continue;
+    return { v, sign, raw: m[0] };
+  }
+  return null;
+}
+const stripOcrMeta = s => cleanMerchant(String(s).replace(/(20\d{2})\s*[.\/\-년]\s*\d{1,2}\s*[.\/\-월]\s*\d{1,2}일?/g, ' ').replace(/\d{1,2}\s*월\s*\d{1,2}\s*일/g, ' ').replace(/\d{1,2}\.\d{1,2}(?=\s|\(|$)/g, ' ').replace(/\((월|화|수|목|금|토|일)\)/g, ' ').replace(/[+\-−–>›<]/g, ' ').replace(/(오늘|어제|잔액|결제|사용|이체|보냄|받음|신용|원)(?=\s|$)/g, ' ')).replace(/^[\s.,:;·]+|[\s.,:;·]+$/g, '');
+function parseOcr(text) {
+  const T = today(), y0 = Number(T.slice(0, 4)), items = [];
+  let curDate = null, pend = '', lastTx = false;
+  const mkDate = (y, mo, d) => { mo = Number(mo); d = Number(d); if (!(mo >= 1 && mo <= 12 && d >= 1 && d <= 31)) return null; let s = `${y || y0}-${p2(mo)}-${p2(d)}`; if (!y && s > T) s = `${y0 - 1}-${p2(mo)}-${p2(d)}`; return s; };
+  for (const raw of String(text || '').split('\n')) {
+    const ln = normOcrLine(raw); if (!ln) continue;
+    let x, d = null;
+    if (/^오늘/.test(ln)) d = T; else if (/^어제/.test(ln)) d = D.add(T, -1);
+    else if ((x = ln.match(/(20\d{2})\s*[.\/\-년]\s*(\d{1,2})\s*[.\/\-월]\s*(\d{1,2})/))) d = mkDate(x[1], x[2], x[3]);
+    else if ((x = ln.match(/(\d{1,2})\s*월\s*(\d{1,2})\s*일/)) || (x = ln.match(/(?:^|\s)(\d{1,2})[.\/](\d{1,2})(?=\s|\(|$)/))) d = mkDate(null, x[1], x[2]);
+    if (d) curDate = d;
+    const am = findMoney(ln);
+    if (!am) { const rest = stripOcrMeta(ln); if (rest && rest.length > 1 && !d) pend = rest; lastTx = false; continue; }
+    if (/잔액|잔고|한도|누적|사용가능|합계|총액|청구/.test(ln)) { lastTx = false; continue; }
+    const rest = stripOcrMeta(ln.replace(am.raw, ' '));
+    if (!am.sign && !/입금|출금|결제|승인/.test(ln) && lastTx && (!rest || rest.length <= 1)) { lastTx = false; continue; }
+    let type = 'out', unsure = false;
+    if (am.sign === '+' || /입금|받음|환급|급여/.test(ln)) type = 'in';
+    else if (am.sign === '-' || /출금|결제|승인|사용|보냄|이체/.test(ln)) type = 'out';
+    else unsure = true;
+    const memo = (rest && rest.length > 1 ? rest : pend) || '(내용 없음)';
+    if (type === 'out' && guessType(memo) === 'save') type = 'save';
+    items.push({ raw: ln, date: curDate || T, noDate: !curDate, memo, amount: am.v, type, unsure, cancel: /취소/.test(ln), method: '캡처', cat: guessCat(memo, type) });
+    pend = ''; lastTx = true;
+  }
+  return items;
+}
+async function runOcr(files) {
+  files = [...files].filter(f => f && /^image\//.test(f.type)); if (!files.length) return;
+  if (IN_CLAUDE) { toast('캡처 읽기는 GitHub 웹사이트 버전에서 쓸 수 있어요'); return; }
+  if (S.ocr) return;
+  goLedger(); S.ocr = { msg: '글자 인식 준비 중…' }; S.sms = null; render(); $('#sms-card')?.scrollIntoView({ block: 'start' });
+  try {
+    const w = await getWorker(); let all = [];
+    for (let i = 0; i < files.length; i++) {
+      const tag = files.length > 1 ? `캡처 ${i + 1}/${files.length}장` : '캡처';
+      setOcrMsg(`${tag} 읽는 중…`); ocrProg = p => setOcrMsg(`${tag} 읽는 중… ${Math.round(p * 100)}%`);
+      const { data } = await w.recognize(await prepImage(files[i]));
+      all = all.concat(parseOcr(data.text));
+    }
+    S.sms = markStatus(all); S.smsSrc = 'ocr';
+  } catch { toast('캡처를 읽지 못했어요. 인터넷 연결을 확인하고 다시 해 주세요'); }
+  S.ocr = null; ocrProg = null; render(); $('#sms-card')?.scrollIntoView({ block: 'start' });
+}
+function goLedger() { if (S.tab !== 'ledger') { S.tab = 'ledger'; S.edit = null; history.replaceState(null, '', '#ledger'); } }
+function autoReadSms() { if (!S.smsText.trim()) return; S.sms = readSms(S.smsText); S.smsSrc = 'sms'; goLedger(); render(); $('#sms-card')?.scrollIntoView({ block: 'start' }); }
 function commitSms() {
   const items = S.sms || []; let added = 0, removed = 0;
   for (const it of items) {
+    if (it.skip) continue;
     if (it.status === 'new') { S.d.tx.push({ id: uid('t'), date: it.date, type: it.type, cat: it.cat, memo: it.memo, amount: it.amount, method: it.method }); added++; }
     else if (it.status === 'cancel-tx') { const i = S.d.tx.findIndex(t => t.id === it.matchId); if (i >= 0) { S.d.tx.splice(i, 1); removed++; } }
   }
@@ -1212,8 +1311,8 @@ document.addEventListener('click', e => {
   const acts = {
     'cancel-edit': () => { S.edit = null; render(); }, 'clear-led': () => { S.ledFilter = null; render(); },
     'dl-ledger': dlLedger, 'dl-tax': dlTax, backup: doBackup, 'fx-latest': () => refreshFx(false), 'fx-trade': fillTradeFx,
-    'sms-read': () => { S.smsText = $('#sms-text')?.value || ''; if (!S.smsText.trim()) { toast('문자를 먼저 붙여넣어 주세요'); return; } S.sms = readSms(S.smsText); render(); $('#sms-card')?.scrollIntoView({ block: 'start' }); },
-    'sms-example': () => { S.smsText = SMS_EXAMPLE; S.sms = null; render(); },
+    'sms-read': () => { S.smsText = $('#sms-text')?.value || ''; if (!S.smsText.trim()) { toast('문자를 먼저 붙여넣어 주세요'); return; } autoReadSms(); },
+    'sms-example': () => { S.smsText = SMS_EXAMPLE; autoReadSms(); },
     'sms-clear': () => { S.smsText = ''; S.sms = null; render(); },
     'sms-cancel': () => { S.sms = null; render(); },
     'sms-commit': commitSms,
@@ -1237,6 +1336,9 @@ document.addEventListener('change', async e => {
   else if (t.id === 'tx-type') { $('#tx-cat').innerHTML = catOpts(t.value, null, !editing('tx')); S.txType = t.value; }
   else if (t.id === 'tax-year') { S.taxYear = Number(t.value); render(); }
   else if (t.dataset.smscat) { const it = S.sms && S.sms[Number(t.dataset.smscat)]; if (it) it.cat = t.value; }
+  else if (t.dataset.smstype) { const it = S.sms && S.sms[Number(t.dataset.smstype)]; if (it) { it.type = t.value; it.cat = guessCat(it.memo, it.type); render(); } }
+  else if (t.dataset.smsinc) { const it = S.sms && S.sms[Number(t.dataset.smsinc)]; if (it) { it.skip = !t.checked; render(); } }
+  else if (t.id === 'ocr-file' || t.id === 'ocr-file-home') { const fs = [...(t.files || [])]; t.value = ''; runOcr(fs); }
   else if (t.id === 'fx-now') { Object.assign(S.d.settings, { fx: parseFloat(t.value.replace(/,/g, '')) || 0, fxSource: 'manual', fxAt: null }); save(); render(); toast('환율을 직접 넣었어요. 자동 갱신은 멈춰요'); }
   else if (t.dataset.price) { const v = parseFloat(t.value.replace(/,/g, '')); if (v > 0) S.d.prices[t.dataset.price] = { price: v, at: today() }; else delete S.d.prices[t.dataset.price]; save(); render(); toast('현재가를 넣었어요'); }
   else if (t.dataset.bal) { const a = S.d.accounts.find(x => x.id === t.dataset.bal); if (a) { a.balance = parseAmt(t.value); a.at = today(); save(); render(); toast('잔액을 고쳤어요'); } }
@@ -1244,6 +1346,18 @@ document.addEventListener('change', async e => {
   else if (t.id === 'restore-file') { const f = t.files && t.files[0]; if (f) await doRestore(f); }
 });
 document.addEventListener('input', e => { if (e.target.id === 'sms-text') S.smsText = e.target.value; });
+// 어디서든 붙여넣기 · 끌어다 놓기: 캡처는 글자 인식, 문자는 바로 읽기
+document.addEventListener('paste', e => {
+  const cd = e.clipboardData; if (!cd) return;
+  const imgs = [...(cd.files || [])].filter(f => /^image\//.test(f.type));
+  if (imgs.length) { e.preventDefault(); runOcr(imgs); return; }
+  const t = e.target;
+  if (t && t.id === 'sms-text') { setTimeout(() => { S.smsText = t.value; autoReadSms(); }, 0); return; }
+  if (t && /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)) return;
+  const text = cd.getData('text'); if (text && SMS_AMT.test(text)) { e.preventDefault(); S.smsText = text; autoReadSms(); }
+});
+document.addEventListener('dragover', e => { if (e.dataTransfer && [...e.dataTransfer.items].some(i => i.kind === 'file')) e.preventDefault(); });
+document.addEventListener('drop', e => { const imgs = [...((e.dataTransfer && e.dataTransfer.files) || [])].filter(f => /^image\//.test(f.type)); if (imgs.length) { e.preventDefault(); runOcr(imgs); } });
 window.addEventListener('hashchange', () => { const h = location.hash.slice(1); if (VIEWS.includes(h) && h !== S.tab) { S.tab = h; S.edit = null; render(); window.scrollTo(0, 0); } });
 function init() {
   loadWS(LS.get(K('ws'), 'sample') === 'mine' ? 'mine' : 'sample');

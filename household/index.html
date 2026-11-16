@@ -395,10 +395,16 @@ function loadWS(ws) {
   S.ws = ws;
   S.d = ws === 'sample' ? (SAMPLE || (SAMPLE = genSample())) : (LS.get(K('mine'), null) || emptyMine());
   const d = S.d; d.settings = d.settings || { costMethod: 'avg', fx: 1400 }; d.prices = d.prices || {};
+  if (ws === 'mine') snapAll();
   S.month = today().slice(0, 7); S.edit = null; S.armed = null; S.ledFilter = null; S.upload = null; S.taxYear = null; S.confirmClear = false;
   LS.set(K('ws'), ws);
 }
-function save() { if (S.ws === 'mine' && !LS.set(K('mine'), S.d)) toast('이 브라우저에 저장하지 못했어요. 백업 파일을 받아 두세요'); }
+function save() {
+  if (S.ws !== 'mine') return;
+  stampChanges();
+  if (!LS.set(K('mine'), S.d)) toast('이 브라우저에 저장하지 못했어요. 백업 파일을 받아 두세요');
+  if (SY) { SY.dirty = true; persistSync(); schedulePush(); }
+}
 function months() { const s = new Set(S.d.tx.map(t => t.date.slice(0, 7))); s.add(today().slice(0, 7)); return [...s].sort(); }
 
 /* ───────── 계산: 가계부 · 고정비 ───────── */
@@ -854,6 +860,7 @@ function vData() {
   const el = $('#v-data'), p = S.d.profile, u = S.upload;
   el.innerHTML = `
   <div class="page-head"><div><h1>설정 · 데이터</h1><p class="meta">지금 보는 가계부: <b>${S.ws === 'sample' ? '예시 가계부 (새로고침하면 처음으로 돌아가요)' : '내 가계부'}</b></p></div>${S.ws === 'sample' ? '<button type="button" class="btn primary" data-ws="mine">내 가계부 시작하기</button>' : ''}</div>
+  ${syncCard()}
   <div class="grid2">
     <div class="card"><h2>내 정보</h2>
       <form class="form" data-form="profile" style="margin-top:12px">
@@ -1200,7 +1207,7 @@ function dlTax() {
 }
 function doBackup() { const d = S.ws === 'mine' ? S.d : (LS.get(K('mine'), null) || emptyMine()); saveFile(`모아가계부_백업_${today()}.json`, JSON.stringify({ app: 'moa-household', v: 1, savedAt: today(), data: d })); }
 async function doRestore(f) {
-  try { const o = JSON.parse(await f.text()), d = o && o.data; if (o.app !== 'moa-household' || !d || !Array.isArray(d.tx) || !Array.isArray(d.trades)) throw 0; LS.set(K('mine'), d); loadWS('mine'); toast('백업을 불러왔어요'); render(); }
+  try { const o = JSON.parse(await f.text()), d = o && o.data; if (o.app !== 'moa-household' || !d || !Array.isArray(d.tx) || !Array.isArray(d.trades)) throw 0; LS.set(K('mine'), d); loadWS('mine'); if (SY) { SY.dirty = true; persistSync(); syncPush(); } toast(SY ? '백업을 불러왔어요. 동기화된 다른 기기에도 이 내용으로 바뀌어요' : '백업을 불러왔어요'); render(); }
   catch { toast('모아 가계부 백업 파일이 아니에요'); }
 }
 
@@ -1240,6 +1247,175 @@ function fxNote() {
   if (s.fxAt) return `환율은 ${s.fxAt} 유럽중앙은행 고시 기준이라 은행 매매기준율과 조금 다를 수 있어요. 양도세 신고에는 증권사 거래내역에 찍힌 환율을 쓰세요.`;
   return '';
 }
+
+/* ───────── 기기 간 동기화 (비밀 링크 · 기기에서 암호화, 서버는 내용을 못 읽음) ───────── */
+const SYNC_API = 'https://moa-sync.moa-sync.workers.dev/v1/';
+const SITE_URL = 'https://converseddululu.github.io/moa-money/household/';
+const COLLS = ['tx', 'fixed', 'savings', 'accounts', 'trades'];
+const SYNC_OK = !IN_CLAUDE && !!(window.crypto && crypto.subtle) && !SYNC_API.includes('REPLACE_');
+let SNAP = {}, SY = null, pushTimer = null, pullAt = 0;
+function bytesToB64(u8) { let s = ''; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(s); }
+function b64ToBytes(b) { const s = atob(b), u = new Uint8Array(s.length); for (let i = 0; i < s.length; i++) u[i] = s.charCodeAt(i); return u; }
+const toUrl = b => b.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+const fromUrl = s => s.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((s.length + 3) % 4);
+async function sha(s) { return new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s))); }
+async function syncKeys(key) {
+  const raw = b64ToBytes(fromUrl(key)); if (raw.length !== 32) throw new Error('bad key');
+  const k = await crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['encrypt', 'decrypt']);
+  return { k, id: toUrl(bytesToB64((await sha('id:' + key)).slice(0, 18))), wt: toUrl(bytesToB64(await sha('write:' + key))) };
+}
+async function encryptDoc(k, obj) { const iv = crypto.getRandomValues(new Uint8Array(12)), ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, k, new TextEncoder().encode(JSON.stringify(obj)))); return { iv: bytesToB64(iv), data: bytesToB64(ct) }; }
+async function decryptDoc(k, doc) { const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b64ToBytes(doc.iv) }, k, b64ToBytes(doc.data)); return JSON.parse(new TextDecoder().decode(pt)); }
+const recSig = x => JSON.stringify(x ?? null, (k, v) => (k === 'mt' || k === 't') ? undefined : v);
+function snapAll() {
+  const d = S.d; SNAP = {};
+  for (const k of COLLS) SNAP[k] = new Map((d[k] || []).map(x => [x.id, recSig(x)]));
+  SNAP.profile = recSig(d.profile); SNAP.settings = recSig(d.settings);
+  SNAP.prices = new Map(Object.entries(d.prices || {}).map(([t, p]) => [t, recSig(p)]));
+}
+// 저장할 때마다 바뀐 기록에 시각(mt)을 찍고, 지운 기록은 '지움 표시'를 남겨요. 두 기기 기록을 합칠 때 써요.
+function stampChanges() {
+  const d = S.d, now = Date.now(); d.deleted = d.deleted || {};
+  for (const k of COLLS) {
+    const prev = SNAP[k] || new Map(), cur = new Map();
+    for (const x of d[k] || []) { const s = recSig(x); if (prev.get(x.id) !== s) x.mt = now; cur.set(x.id, s); }
+    for (const id of prev.keys()) if (!cur.has(id)) d.deleted[id] = now;
+    SNAP[k] = cur;
+  }
+  for (const k of ['profile', 'settings']) { const s = recSig(d[k]); if (SNAP[k] !== s) { d[k].mt = now; SNAP[k] = s; } }
+  const pp = SNAP.prices || new Map(), pc = new Map();
+  for (const [t, p] of Object.entries(d.prices || {})) { const s = recSig(p); if (pp.get(t) !== s) p.t = now; pc.set(t, s); }
+  for (const t of pp.keys()) if (!pc.has(t)) d.deleted['price:' + t] = now;
+  SNAP.prices = pc;
+  for (const [id, at] of Object.entries(d.deleted)) if (now - at > 120 * 864e5) delete d.deleted[id];
+}
+function mergeDocs(a, b) { // a = 서버, b = 이 기기. 같은 기록은 나중에 고친 쪽, 지운 기록은 지운 뒤에 고치지 않았으면 지움
+  const del = { ...(a.deleted || {}) }; for (const [id, t] of Object.entries(b.deleted || {})) del[id] = Math.max(del[id] || 0, t);
+  const out = { ...a, deleted: del }, alive = x => !(del[x.id] && del[x.id] >= (x.mt || 0));
+  for (const k of COLLS) { const m = new Map(); for (const x of a[k] || []) m.set(x.id, x); for (const x of b[k] || []) { const y = m.get(x.id); if (!y || (x.mt || 0) >= (y.mt || 0)) m.set(x.id, x); } out[k] = [...m.values()].filter(alive); }
+  out.tx.sort(byDate);
+  out.prices = { ...(a.prices || {}) }; for (const [t, p] of Object.entries(b.prices || {})) { const q = out.prices[t]; if (!q || (p.t || 0) >= (q.t || 0)) out.prices[t] = p; }
+  for (const t of Object.keys(out.prices)) if (del['price:' + t] && del['price:' + t] >= (out.prices[t].t || 0)) delete out.prices[t];
+  for (const k of ['profile', 'settings']) out[k] = ((b[k] && b[k].mt) || 0) >= ((a[k] && a[k].mt) || 0) ? b[k] : a[k];
+  return out;
+}
+function normalizeDoc(d) { const e = emptyMine(); for (const k of Object.keys(e)) if (d[k] == null) d[k] = e[k]; return d; }
+async function syncStart(key, v) { SY = { key, ...(await syncKeys(key)), v: v || 0, dirty: false, status: 'idle', at: null }; }
+function persistSync() { if (SY) LS.set(K('sync'), { key: SY.key, v: SY.v, dirty: SY.dirty, at: SY.at }); else LS.del(K('sync')); }
+async function api(method, body) {
+  const opt = { method, headers: method === 'GET' ? {} : { 'X-Write-Token': SY.wt } };
+  if (body) { opt.headers['Content-Type'] = 'application/json'; opt.body = JSON.stringify(body); }
+  const r = await fetch(SYNC_API + SY.id, opt); let j = null; try { j = await r.json(); } catch {}
+  return { status: r.status, j };
+}
+function applyRemote(d) { S.d = normalizeDoc(d); LS.set(K('mine'), S.d); snapAll(); render(); }
+function syncChip() {
+  if (!SY || S.ws !== 'mine') return '<span id="sync-chip"></span>';
+  const m = { ok: ['ok', '동기화됨'], busy: ['muted', '동기화 중…'], idle: ['muted', '동기화 대기'], offline: ['warn', '오프라인 · 나중에 올려요'], gone: ['crit', '서버에 동기화 기록이 없어요'], badkey: ['crit', '링크 열쇠가 맞지 않아요'], forbidden: ['crit', '쓸 권한이 없어요'] }[SY.status] || ['muted', '동기화'];
+  return `<a id="sync-chip" class="chip ${m[0]}" href="#data">${m[1]}</a>`;
+}
+function setSync(st) { if (!SY) return; SY.status = st; const el = $('#sync-chip'); if (el) el.outerHTML = syncChip(); const t = $('#sync-state'); if (t) t.textContent = syncStateText(); }
+const syncStateText = () => !SY ? '' : `${{ ok: '동기화됨', busy: '동기화 중…', idle: '대기 중', offline: '오프라인이라 나중에 올려요', gone: '서버에 기록이 없어요', badkey: '열쇠가 맞지 않아요', forbidden: '쓸 권한이 없어요' }[SY.status] || ''}${SY.at ? ` · 마지막 ${new Date(SY.at).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}` : ''}`;
+async function syncPull() {
+  if (!SY || S.ws !== 'mine') return; pullAt = Date.now(); setSync('busy');
+  try {
+    const { status, j } = await api('GET');
+    if (status === 404) { if (SY.dirty || SY.v === 0) { await syncPush(); return; } setSync('gone'); return; }
+    if (status !== 200) throw new Error('http');
+    if (j.v > SY.v) { const remote = await decryptDoc(SY.k, j); applyRemote(SY.dirty ? mergeDocs(remote, S.d) : remote); SY.v = j.v; }
+    if (SY.dirty) { persistSync(); await syncPush(); return; }
+    SY.at = Date.now(); persistSync(); setSync('ok');
+  } catch (e) { setSync(e && e.name === 'OperationError' ? 'badkey' : 'offline'); }
+}
+async function syncPush(retry = true) {
+  if (!SY || !SY.dirty || S.ws !== 'mine') return; setSync('busy');
+  try {
+    const { status, j } = await api('PUT', { base: SY.v, ...(await encryptDoc(SY.k, S.d)) });
+    if (status === 200) { SY.v = j.v; SY.dirty = false; SY.at = Date.now(); persistSync(); setSync('ok'); return; }
+    if (status === 409 && retry) { const g = await api('GET'); if (g.status === 200) { applyRemote(mergeDocs(await decryptDoc(SY.k, g.j), S.d)); SY.v = g.j.v; persistSync(); return syncPush(false); } }
+    if (status === 403) { setSync('forbidden'); return; }
+    throw new Error('http ' + status);
+  } catch (e) { setSync(e && e.name === 'OperationError' ? 'badkey' : 'offline'); clearTimeout(pushTimer); pushTimer = setTimeout(() => syncPush(), 30000); }
+}
+function schedulePush() { clearTimeout(pushTimer); pushTimer = setTimeout(() => syncPush(), 2500); }
+const syncLink = () => SY ? `${/\.github\.io$/.test(location.hostname) ? location.origin + location.pathname : SITE_URL}#sync=${SY.key}` : '';
+async function syncEnable() {
+  if (!SYNC_OK) return;
+  if (S.ws !== 'mine') loadWS('mine');
+  await syncStart(toUrl(bytesToB64(crypto.getRandomValues(new Uint8Array(32)))), 0);
+  SY.dirty = true; persistSync(); await syncPush(false);
+  toast(SY && SY.status === 'ok' ? '동기화를 켰어요. 다른 기기에서 QR이나 링크로 열어 보세요' : '서버에 올리지 못했어요. 인터넷이 되면 다시 올려요');
+  S.tab = 'data'; render();
+}
+function syncOff() { SY = null; clearTimeout(pushTimer); persistSync(); }
+async function handleSyncHash() {
+  const m = location.hash.match(/^#sync=([A-Za-z0-9_-]{43})$/); if (!m) return false;
+  history.replaceState(null, '', location.pathname + location.search + '#home');
+  if (!SYNC_OK) { toast('이 화면에서는 동기화를 쓸 수 없어요. GitHub 웹사이트에서 열어 주세요'); return true; }
+  const key = m[1];
+  if (SY && SY.key === key) { if (S.ws !== 'mine') { loadWS('mine'); render(); } syncPull(); return true; }
+  try {
+    const ks = await syncKeys(key), r = await fetch(SYNC_API + ks.id);
+    if (r.status === 404) { toast('동기화 기록을 찾지 못했어요. 링크를 다시 확인해 주세요'); return true; }
+    const j = await r.json(), remote = normalizeDoc(await decryptDoc(ks.k, j));
+    if (S.ws !== 'mine') loadWS('mine');
+    const d = S.d, empty = !d.tx.length && !d.accounts.length && !d.trades.length && !d.fixed.length && !d.savings.length;
+    S.join = { key, v: j.v, remote };
+    if (empty) await joinApply('replace'); else { S.tab = 'data'; render(); toast('이 기기에 있던 기록을 어떻게 할지 골라 주세요'); }
+  } catch { toast('링크 열쇠가 맞지 않거나 서버에 연결하지 못했어요'); }
+  return true;
+}
+async function joinApply(mode) {
+  const J = S.join; if (!J) return;
+  await syncStart(J.key, J.v);
+  const merge = mode === 'merge';
+  applyRemote(merge ? mergeDocs(J.remote, S.d) : J.remote);
+  SY.dirty = merge; SY.at = Date.now(); persistSync(); S.join = null; setSync('ok');
+  if (merge) await syncPush();
+  toast(merge ? '이 기기 기록과 합쳐서 동기화했어요' : '동기화된 가계부를 불러왔어요');
+  S.tab = 'home'; history.replaceState(null, '', location.pathname + location.search + '#home'); render();
+}
+async function drawQR() {
+  const el = $('#sync-qr'); if (!el || !SY) return;
+  try { if (!window.QRCode) await loadScript('https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js'); el.innerHTML = ''; new window.QRCode(el, { text: syncLink(), width: 168, height: 168, correctLevel: window.QRCode.CorrectLevel.M }); }
+  catch { el.innerHTML = '<p class="meta">QR을 그리지 못했어요. 링크를 복사해서 쓰세요.</p>'; }
+}
+function syncCard() {
+  if (IN_CLAUDE) return `<div class="card"><h2>기기 간 동기화</h2><p class="meta" style="margin-top:8px">휴대폰과 컴퓨터에서 같은 가계부를 보는 동기화는 GitHub 웹사이트 버전에서 쓸 수 있어요.</p></div>`;
+  if (!SYNC_OK) return '';
+  if (S.join) return `<div class="card" id="sync-card"><h2>동기화 가계부를 찾았어요</h2><p style="margin-top:8px">이 기기에도 이미 기록이 있어요. 어떻게 할까요?</p>
+    <div class="btns" style="margin-top:12px"><button type="button" class="btn primary" data-act="join-merge">이 기기 기록과 합치기</button><button type="button" class="btn" data-act="join-replace">동기화 기록으로 바꾸기</button><button type="button" class="btn" data-act="join-cancel">그만두기</button></div>
+    <p class="meta" style="margin-top:8px">'바꾸기'를 고르면 이 기기에만 있던 기록은 사라져요. 걱정되면 먼저 아래에서 백업 파일을 받아 두세요.</p></div>`;
+  if (!SY) return `<div class="card" id="sync-card"><h2>기기 간 동기화</h2>
+    <p style="margin-top:8px">켜면 <b>나만의 비밀 링크와 QR 코드</b>가 생겨요. 다른 기기에서 그 링크를 열면 같은 가계부가 보이고, 고칠 때마다 자동으로 맞춰져요.</p>
+    <p class="meta">기록은 이 기기에서 암호화해서 올려요. 서버(만든 사람 포함)는 내용을 읽을 수 없고, 열쇠는 링크 안에만 있어요.</p>
+    <div class="btns" style="margin-top:12px"><button type="button" class="btn primary" data-act="sync-on">${S.ws === 'mine' ? '동기화 켜기' : '내 가계부로 바꾸고 동기화 켜기'}</button></div></div>`;
+  return `<div class="card" id="sync-card"><div class="card-head"><h2>기기 간 동기화</h2><span class="meta" id="sync-state">${syncStateText()}</span></div>
+    <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:flex-start">
+      <div id="sync-qr" style="background:#fff;padding:8px;border-radius:8px;width:184px;height:184px;flex:none" aria-label="동기화 링크 QR 코드"></div>
+      <div style="flex:1;min-width:220px;display:grid;gap:8px">
+        <p>다른 기기에서 <b>휴대폰 카메라로 QR을 찍거나</b> 아래 링크를 열면 같은 가계부가 열려요.</p>
+        <label class="sr" for="sync-link">나만의 동기화 링크</label><input id="sync-link" readonly value="${esc(syncLink())}" style="width:100%;font-family:var(--f-num);font-size:12px">
+        <div class="btns"><button type="button" class="btn" data-act="sync-copy">링크 복사</button><button type="button" class="btn" data-act="sync-now">지금 동기화</button></div>
+        <p class="meta"><b>이 링크는 비밀번호와 같아요.</b> 친구에게는 이 링크 말고 사이트 주소를 보내 주세요. 링크를 잃어버려도 이 기기 기록은 그대로 있어요.</p>
+      </div>
+    </div>
+    <div class="btns" style="margin-top:12px"><button type="button" class="link-btn" data-act="sync-off">이 기기에서 동기화 끄기</button>${S.armed === 'sync:del' ? '<button type="button" class="link-btn danger" data-act="sync-del">정말 서버에서 지울까요? (모든 기기의 동기화가 끊겨요)</button>' : '<button type="button" class="link-btn danger" data-act="sync-del">서버에서 동기화 기록 지우기</button>'}</div>
+  </div>`;
+}
+async function syncInit() {
+  if (!SYNC_OK) return;
+  const st = LS.get(K('sync'), null);
+  if (st && st.key) { try { await syncStart(st.key, st.v); SY.dirty = !!st.dirty; SY.at = st.at || null; } catch { SY = null; } }
+  const handled = await handleSyncHash();
+  if (!handled && SY && S.ws === 'mine') syncPull();
+  renderBar();
+}
+document.addEventListener('visibilitychange', () => {
+  if (!SY || S.ws !== 'mine') return;
+  if (document.visibilityState === 'hidden') { if (SY.dirty) syncPush(); }
+  else if (Date.now() - pullAt > 20000) syncPull();
+});
 
 /* ───────── 저장 폼 ───────── */
 const FORMS = {
@@ -1285,7 +1461,7 @@ const VIEWS = ['home', 'ledger', 'fixed', 'savings', 'stocks', 'data'];
 let tT;
 function toast(m) { const t = $('#toast'); t.textContent = m; t.classList.add('show'); clearTimeout(tT); tT = setTimeout(() => t.classList.remove('show'), 2800); }
 function renderBar() {
-  $('#who').innerHTML = S.ws === 'sample' ? '<span class="chip muted">예시 데이터</span>' : (S.d.profile.name ? `${esc(S.d.profile.name)}님의 가계부` : '내 가계부');
+  $('#who').innerHTML = (S.ws === 'sample' ? '<span class="chip muted">예시 데이터</span>' : (S.d.profile.name ? `${esc(S.d.profile.name)}님의 가계부` : '내 가계부')) + syncChip();
   for (const b of document.querySelectorAll('.bar [data-ws]')) b.setAttribute('aria-pressed', String(b.dataset.ws === S.ws));
   const ms = months(); if (!ms.includes(S.month)) S.month = ms[ms.length - 1];
   $('#month').innerHTML = ms.slice().reverse().map(m => `<option value="${m}"${m === S.month ? ' selected' : ''}>${fmtYM(m)}</option>`).join('');
@@ -1295,6 +1471,7 @@ function render() {
   renderBar();
   for (const v of VIEWS) $('#v-' + v).hidden = v !== S.tab;
   ({ home: vHome, ledger: vLedger, fixed: vFixed, savings: vSavings, stocks: vStocks, data: vData })[S.tab]();
+  if (S.tab === 'data' && SY && !S.join) drawQR();
 }
 document.addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b || b.disabled) return;
@@ -1304,7 +1481,7 @@ document.addEventListener('click', e => {
     if (i >= 0) arr.splice(i, 1); S.armed = null; if (S.edit?.obj?.id === id) S.edit = null; save(); toast('지웠어요'); render(); return;
   }
   if (S.armed) S.armed = null;
-  if (b.dataset.ws) { if (b.dataset.ws !== S.ws) { loadWS(b.dataset.ws); maybeAutoFx(); if (S.ws === 'mine' && !S.d.tx.length && !S.d.accounts.length) { S.tab = 'data'; location.hash = 'data'; } render(); toast(S.ws === 'sample' ? '예시 가계부를 보고 있어요' : '내 가계부를 보고 있어요'); } return; }
+  if (b.dataset.ws) { if (b.dataset.ws !== S.ws) { loadWS(b.dataset.ws); maybeAutoFx(); if (S.ws === 'mine' && SY) syncPull(); if (S.ws === 'mine' && !S.d.tx.length && !S.d.accounts.length) { S.tab = 'data'; location.hash = 'data'; } render(); toast(S.ws === 'sample' ? '예시 가계부를 보고 있어요' : '내 가계부를 보고 있어요'); } return; }
   if (b.dataset.edit) { const [kind, id] = b.dataset.edit.split(':'), obj = S.d[COLL[kind]].find(x => x.id === id); if (obj) { S.edit = { kind, obj }; render(); document.querySelector(`form[data-form="${kind}"]`)?.closest('.card')?.scrollIntoView({ block: 'start' }); } return; }
   if (b.dataset.led !== undefined) { S.ledFilter = S.ledFilter === b.dataset.led ? null : b.dataset.led; if (S.tab !== 'ledger') { S.tab = 'ledger'; location.hash = 'ledger'; } render(); return; }
   if (b.dataset.method) { S.d.settings.costMethod = b.dataset.method; save(); render(); toast(b.dataset.method === 'fifo' ? '선입선출법으로 계산해요' : '이동평균법으로 계산해요'); return; }
@@ -1318,7 +1495,16 @@ document.addEventListener('click', e => {
     'sms-commit': commitSms,
     'up-commit': commitUpload, 'up-cancel': () => { S.upload = null; render(); },
     clear: () => { S.confirmClear = true; render(); }, 'clear-no': () => { S.confirmClear = false; render(); },
-    'clear-yes': () => { LS.del(K('mine')); S.confirmClear = false; if (S.ws === 'mine') loadWS('mine'); toast('내 가계부를 지웠어요'); render(); }
+    'clear-yes': () => { syncOff(); LS.del(K('mine')); S.confirmClear = false; if (S.ws === 'mine') loadWS('mine'); toast('이 기기의 내 가계부를 지웠어요. 동기화도 이 기기에서 껐어요'); render(); },
+    'sync-on': () => syncEnable(),
+    'sync-now': () => { if (SY) { if (S.ws !== 'mine') { loadWS('mine'); render(); } syncPull(); } },
+    'sync-off': () => { syncOff(); toast('이 기기에서 동기화를 껐어요. 기록은 이 기기에 남아요'); render(); },
+    'sync-del': async () => {
+      if (S.armed !== 'sync:del') { S.armed = 'sync:del'; render(); return; }
+      S.armed = null; try { const r = await api('DELETE'); if (r.status !== 200) throw 0; syncOff(); toast('서버의 동기화 기록을 지웠어요. 이 기기 기록은 남아요'); } catch { toast('서버에 연결하지 못했어요. 잠시 후 다시 해 주세요'); } render();
+    },
+    'sync-copy': () => { const v = syncLink(); navigator.clipboard.writeText(v).then(() => toast('링크를 복사했어요. 다른 기기로 보내서 열어 주세요')).catch(() => { const i = $('#sync-link'); if (i) { i.focus(); i.select(); } toast('링크를 선택했어요. 복사해서 쓰세요'); }); },
+    'join-merge': () => joinApply('merge'), 'join-replace': () => joinApply('replace'), 'join-cancel': () => { S.join = null; render(); }
   };
   if (acts[b.dataset.act]) { acts[b.dataset.act](); return; }
   if (S.armed === null && b.closest('.view')) {/* no-op */ }
@@ -1358,11 +1544,11 @@ document.addEventListener('paste', e => {
 });
 document.addEventListener('dragover', e => { if (e.dataTransfer && [...e.dataTransfer.items].some(i => i.kind === 'file')) e.preventDefault(); });
 document.addEventListener('drop', e => { const imgs = [...((e.dataTransfer && e.dataTransfer.files) || [])].filter(f => /^image\//.test(f.type)); if (imgs.length) { e.preventDefault(); runOcr(imgs); } });
-window.addEventListener('hashchange', () => { const h = location.hash.slice(1); if (VIEWS.includes(h) && h !== S.tab) { S.tab = h; S.edit = null; render(); window.scrollTo(0, 0); } });
+window.addEventListener('hashchange', () => { if (location.hash.startsWith('#sync=')) { handleSyncHash(); return; } const h = location.hash.slice(1); if (VIEWS.includes(h) && h !== S.tab) { S.tab = h; S.edit = null; render(); window.scrollTo(0, 0); } });
 function init() {
   loadWS(LS.get(K('ws'), 'sample') === 'mine' ? 'mine' : 'sample');
   const h = location.hash.slice(1); S.tab = VIEWS.includes(h) ? h : 'home';
-  render(); maybeAutoFx();
+  render(); maybeAutoFx(); syncInit();
 }
 if (!window.__MOA_TEST__) init();
 </script>

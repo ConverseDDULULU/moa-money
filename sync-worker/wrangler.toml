@@ -1,0 +1,8 @@
+name = "moa-sync"
+main = "src/index.js"
+compatibility_date = "2026-11-01"
+workers_dev = true
+
+[[kv_namespaces]]
+binding = "MOA_SYNC"
+id = "e7eaf235464f40c0b4f0692c507bd843"

@@ -304,7 +304,7 @@ function genSample() {
   const T = today(), m0 = T.slice(0, 7), m1 = prevYM(m0), m2 = prevYM(m1);
   const d = {
     profile: { name: '예시', payday: 25, income: 3800000, budget: 1900000 },
-    settings: { costMethod: 'avg', fx: 1425 },
+    settings: { costMethod: 'avg', fx: 1425, fxSource: 'auto' },
     accounts: [
       { id: 'a1', kind: 'bank', name: '토스뱅크 입출금 (생활비)', balance: 1864200, spend: true, at: T },
       { id: 'a2', kind: 'bank', name: '카카오뱅크 세이프박스', balance: 5000000, spend: false, at: T },
@@ -384,7 +384,7 @@ function genSample() {
   for (const [dt, q, p, fx] of [['2025-10-27', 30, 27.10, 1432], ['2026-01-26', 25, 27.90, 1445], ['2026-04-27', 25, 28.40, 1410], ['2026-07-27', 25, 28.90, 1395], ['2026-10-26', 25, 29.20, 1420]]) if (dt <= T) tr(dt, 'US', '슈왑 미국배당 SCHD', 'SCHD', 'buy', q, p, +(q * p * .0007).toFixed(2), fx);
   return d;
 }
-const emptyMine = () => ({ profile: { name: '', payday: 25, income: 0, budget: 0 }, settings: { costMethod: 'avg', fx: 1400 }, accounts: [], savings: [], fixed: [], tx: [], trades: [], prices: {} });
+const emptyMine = () => ({ profile: { name: '', payday: 25, income: 0, budget: 0 }, settings: { costMethod: 'avg', fx: 1400, fxSource: 'auto' }, accounts: [], savings: [], fixed: [], tx: [], trades: [], prices: {} });
 
 /* ───────── 상태 ───────── */
 const S = { ws: 'sample', d: null, tab: 'home', month: null, edit: null, armed: null, ledFilter: null, txType: 'out', upload: null, confirmClear: false, taxYear: null, simKey: '', simQty: '' };
@@ -757,7 +757,9 @@ function vStocks() {
   el.innerHTML = `
   <div class="page-head"><div><h1>주식 · 양도세</h1><p class="meta">거래 내역으로 보유 종목과 손익을 계산하고, 해외주식 양도소득세를 미리 계산해요. 한국식으로 <span class="up">빨강은 수익</span>, <span class="down">파랑은 손실</span>이에요.</p></div>
     <div class="btns"><div class="seg" role="group" aria-label="취득가 계산 방법"><button type="button" data-method="avg" aria-pressed="${method === 'avg'}">이동평균법</button><button type="button" data-method="fifo" aria-pressed="${method === 'fifo'}">선입선출법</button></div>
-    <label class="mon" for="fx-now">현재 환율 <input id="fx-now" inputmode="decimal" value="${fxNow || ''}" style="width:90px" aria-label="현재 원/달러 환율"> 원/달러</label></div></div>
+    <label class="mon" for="fx-now">현재 환율 <input id="fx-now" inputmode="decimal" value="${fxNow || ''}" style="width:90px" aria-label="현재 원/달러 환율"> 원/달러</label>
+    ${IN_CLAUDE ? '' : `<button type="button" class="btn sm" data-act="fx-latest"${fxBusy ? ' disabled' : ''}>${fxBusy ? '불러오는 중…' : '오늘 환율'}</button>`}</div></div>
+  ${fxNote() ? `<p class="meta">${fxNote()}</p>` : ''}
   ${S.ws === 'sample' ? '<p class="note">예시 시세예요. 실제 가격이 아니에요. 실시간 시세는 연결돼 있지 않아서 현재가는 직접 넣어 줘야 해요.</p>' : '<p class="note">실시간 시세는 연결돼 있지 않아요. 보유 종목 표의 현재가 칸에 가격을 넣어 주세요.</p>'}
   ${b.warnings.length ? `<p class="note warn">${b.warnings.map(esc).join('<br>')}</p>` : ''}
   <div class="kpis">
@@ -821,6 +823,7 @@ function vStocks() {
       ${inp('tr-price', 'price', '1주 가격 (원 또는 달러)', e?.price, 'inputmode="decimal" required')}
       ${inp('tr-fee', 'fee', '수수료 (가격과 같은 통화)', e?.fee ?? '', 'inputmode="decimal" placeholder="0"')}
       ${inp('tr-fx', 'fx', '환율 (해외만, 원/달러)', e?.fx && e.market === 'US' ? e.fx : '', 'inputmode="decimal" placeholder="예: 1,420"')}
+      ${IN_CLAUDE ? '' : '<div style="display:grid;align-items:end"><button type="button" class="btn" data-act="fx-trade">거래일 환율 넣기</button></div>'}
       ${formActions('trade', '넣기')}
     </form>
   </div>
@@ -960,6 +963,43 @@ async function doRestore(f) {
   catch { toast('모아 가계부 백업 파일이 아니에요'); }
 }
 
+/* ───────── 환율 (Frankfurter · 유럽중앙은행 고시, 키 없음) ───────── */
+const IN_CLAUDE = !!(window.claude && window.claude.use);
+const FX_API = 'https://api.frankfurter.dev/v1/';
+let fxBusy = false;
+async function fetchFx(date) {
+  const r = await fetch(`${FX_API}${date}?base=USD&symbols=KRW`);
+  if (!r.ok) throw new Error('http ' + r.status);
+  const j = await r.json(), v = Number(j && j.rates && j.rates.KRW);
+  if (!(v > 0)) throw new Error('no rate');
+  return { rate: Math.round(v * 100) / 100, date: j.date };
+}
+async function refreshFx(silent) {
+  if (IN_CLAUDE || fxBusy) return;
+  fxBusy = true; if (!silent && S.tab === 'stocks') render();
+  try {
+    const { rate, date } = await fetchFx('latest');
+    Object.assign(S.d.settings, { fx: rate, fxAt: date, fxSource: 'auto', fxChecked: today() }); save();
+    if (!silent) toast(`1달러 = ${rate.toLocaleString('ko-KR')}원 (${date} 기준)`);
+  } catch { if (!silent) toast('환율을 불러오지 못했어요. 인터넷 연결을 확인하거나 직접 넣어 주세요'); }
+  finally { fxBusy = false; render(); }
+}
+function maybeAutoFx() { const s = S.d.settings; if (!IN_CLAUDE && s.fxSource !== 'manual' && s.fxChecked !== today()) refreshFx(true); }
+async function fillTradeFx() {
+  const d = $('#tr-date')?.value, box = $('#tr-fx'); if (!d || !box) return;
+  if ($('#tr-market')?.value !== 'US') { toast('해외 주식·ETF일 때만 환율이 필요해요'); return; }
+  if (d > today()) { toast('미래 날짜의 환율은 없어요'); return; }
+  try { const { rate, date } = await fetchFx(d); box.value = rate; toast(date === d ? `${d} 환율 ${rate.toLocaleString('ko-KR')}원을 넣었어요` : `${d}에는 고시가 없어서 ${date} 환율 ${rate.toLocaleString('ko-KR')}원을 넣었어요`); }
+  catch { toast('그날 환율을 불러오지 못했어요. 직접 넣어 주세요'); }
+}
+function fxNote() {
+  const s = S.d.settings;
+  if (IN_CLAUDE) return '환율 자동 불러오기는 GitHub 웹사이트 버전에서 쓸 수 있어요.';
+  if (s.fxSource === 'manual') return "직접 넣은 환율이에요. '오늘 환율'을 누르면 다시 매일 자동으로 바꿔요.";
+  if (s.fxAt) return `환율은 ${s.fxAt} 유럽중앙은행 고시 기준이라 은행 매매기준율과 조금 다를 수 있어요. 양도세 신고에는 증권사 거래내역에 찍힌 환율을 쓰세요.`;
+  return '';
+}
+
 /* ───────── 저장 폼 ───────── */
 const FORMS = {
   tx(v) {
@@ -1023,13 +1063,13 @@ document.addEventListener('click', e => {
     if (i >= 0) arr.splice(i, 1); S.armed = null; if (S.edit?.obj?.id === id) S.edit = null; save(); toast('지웠어요'); render(); return;
   }
   if (S.armed) S.armed = null;
-  if (b.dataset.ws) { if (b.dataset.ws !== S.ws) { loadWS(b.dataset.ws); if (S.ws === 'mine' && !S.d.tx.length && !S.d.accounts.length) { S.tab = 'data'; location.hash = 'data'; } render(); toast(S.ws === 'sample' ? '예시 가계부를 보고 있어요' : '내 가계부를 보고 있어요'); } return; }
+  if (b.dataset.ws) { if (b.dataset.ws !== S.ws) { loadWS(b.dataset.ws); maybeAutoFx(); if (S.ws === 'mine' && !S.d.tx.length && !S.d.accounts.length) { S.tab = 'data'; location.hash = 'data'; } render(); toast(S.ws === 'sample' ? '예시 가계부를 보고 있어요' : '내 가계부를 보고 있어요'); } return; }
   if (b.dataset.edit) { const [kind, id] = b.dataset.edit.split(':'), obj = S.d[COLL[kind]].find(x => x.id === id); if (obj) { S.edit = { kind, obj }; render(); document.querySelector(`form[data-form="${kind}"]`)?.closest('.card')?.scrollIntoView({ block: 'start' }); } return; }
   if (b.dataset.led !== undefined) { S.ledFilter = S.ledFilter === b.dataset.led ? null : b.dataset.led; if (S.tab !== 'ledger') { S.tab = 'ledger'; location.hash = 'ledger'; } render(); return; }
   if (b.dataset.method) { S.d.settings.costMethod = b.dataset.method; save(); render(); toast(b.dataset.method === 'fifo' ? '선입선출법으로 계산해요' : '이동평균법으로 계산해요'); return; }
   const acts = {
     'cancel-edit': () => { S.edit = null; render(); }, 'clear-led': () => { S.ledFilter = null; render(); },
-    'dl-ledger': dlLedger, 'dl-tax': dlTax, backup: doBackup,
+    'dl-ledger': dlLedger, 'dl-tax': dlTax, backup: doBackup, 'fx-latest': () => refreshFx(false), 'fx-trade': fillTradeFx,
     'up-commit': commitUpload, 'up-cancel': () => { S.upload = null; render(); },
     clear: () => { S.confirmClear = true; render(); }, 'clear-no': () => { S.confirmClear = false; render(); },
     'clear-yes': () => { LS.del(K('mine')); S.confirmClear = false; if (S.ws === 'mine') loadWS('mine'); toast('내 가계부를 지웠어요'); render(); }
@@ -1049,7 +1089,7 @@ document.addEventListener('change', async e => {
   if (t.id === 'month') { S.month = t.value; S.ledFilter = null; render(); }
   else if (t.id === 'tx-type') { $('#tx-cat').innerHTML = catOpts(t.value, null, !editing('tx')); S.txType = t.value; }
   else if (t.id === 'tax-year') { S.taxYear = Number(t.value); render(); }
-  else if (t.id === 'fx-now') { S.d.settings.fx = parseFloat(t.value.replace(/,/g, '')) || 0; save(); render(); toast('환율을 바꿨어요'); }
+  else if (t.id === 'fx-now') { Object.assign(S.d.settings, { fx: parseFloat(t.value.replace(/,/g, '')) || 0, fxSource: 'manual', fxAt: null }); save(); render(); toast('환율을 직접 넣었어요. 자동 갱신은 멈춰요'); }
   else if (t.dataset.price) { const v = parseFloat(t.value.replace(/,/g, '')); if (v > 0) S.d.prices[t.dataset.price] = { price: v, at: today() }; else delete S.d.prices[t.dataset.price]; save(); render(); toast('현재가를 넣었어요'); }
   else if (t.dataset.bal) { const a = S.d.accounts.find(x => x.id === t.dataset.bal); if (a) { a.balance = parseAmt(t.value); a.at = today(); save(); render(); toast('잔액을 고쳤어요'); } }
   else if (t.id === 'up-file') { const f = t.files && t.files[0]; if (f) await handleUpload(f); }
@@ -1059,7 +1099,7 @@ window.addEventListener('hashchange', () => { const h = location.hash.slice(1); 
 function init() {
   loadWS(LS.get(K('ws'), 'sample') === 'mine' ? 'mine' : 'sample');
   const h = location.hash.slice(1); S.tab = VIEWS.includes(h) ? h : 'home';
-  render();
+  render(); maybeAutoFx();
 }
 if (!window.__MOA_TEST__) init();
 </script>

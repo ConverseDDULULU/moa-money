@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>모아 돈 관리 앱</title>
+<meta name="description" content="개인 가계부(모아 가계부)와 회사 재무 장부(돈흐름 장부). 설치 없이 브라우저에서 바로 쓰고, 데이터는 각자 브라우저에만 저장돼요.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Gowun+Batang:wght@700&family=Noto+Sans+KR:wght@400;500;700&display=swap">
+<style>
+:root{--bg:#F3F4F7;--surface:#FFF;--ink:#161A26;--ink-2:#4A5164;--ink-3:#787F92;--line:#DADDE6;--accent:#2747C4;--accent-ink:#FFF;--green:#0D6A52;--green-ink:#FFF;color-scheme:light}
+@media (prefers-color-scheme: dark){:root{--bg:#0F1118;--surface:#171A24;--ink:#E6E8EF;--ink-2:#A9AFC0;--ink-3:#7E8598;--line:#2A2F3D;--accent:#7D96F0;--accent-ink:#0C1330;--green:#4CC096;--green-ink:#04241A;color-scheme:dark}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.65 "Noto Sans KR","Apple SD Gothic Neo","Malgun Gothic",system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+.wrap{max-width:960px;margin:0 auto;padding:48px max(16px,env(safe-area-inset-right,0px)) 64px max(16px,env(safe-area-inset-left,0px))}
+h1{font:700 34px/1.3 "Gowun Batang","Nanum Myeongjo",serif;margin:0 0 10px;letter-spacing:-.01em;text-wrap:balance}
+.lead{color:var(--ink-2);max-width:60ch;margin:0}
+.apps{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin:32px 0}
+.app{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:22px;display:grid;gap:12px;align-content:start}
+.app h2{margin:0;font:700 22px/1.3 "Gowun Batang",serif}
+.who{font-size:12.5px;font-weight:700;letter-spacing:.04em;color:var(--ink-3)}
+.app ul{margin:0;padding-left:18px;color:var(--ink-2);font-size:14px;display:grid;gap:3px}
+.btns{display:flex;gap:8px;flex-wrap:wrap;margin-top:4px}
+.btn{display:inline-flex;align-items:center;padding:9px 16px;border-radius:8px;border:1px solid var(--line);background:var(--surface);color:var(--ink);text-decoration:none;font-weight:500}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.app.biz .btn.primary{background:var(--green);border-color:var(--green);color:var(--green-ink)}
+.btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.info{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}
+.info div{border-top:2px solid var(--line);padding-top:12px}
+.info h3{margin:0 0 4px;font-size:15px}
+.info p{margin:0;color:var(--ink-2);font-size:14px}
+footer{margin-top:40px;color:var(--ink-3);font-size:13px}
+footer a{color:var(--ink-2)}
+@media (max-width:720px){.apps,.info{grid-template-columns:1fr} h1{font-size:28px} .wrap{padding-top:32px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>돈 관리 앱 두 가지</h1>
+  <p class="lead">설치 없이 브라우저에서 바로 쓰는 가계부와 회사 장부예요. 처음에는 예시 데이터로 둘러보고, 준비되면 내 데이터로 시작하면 돼요.</p>
+
+  <div class="apps">
+    <section class="app">
+      <span class="who">개인용</span>
+      <h2>모아 가계부</h2>
+      <ul>
+        <li>통장 · 예적금 · 주식 · 대출을 합친 순자산</li>
+        <li>가계부와 분류별 지출, 한 달 예산</li>
+        <li>월 고정비 계산과 월급날까지 남는 돈</li>
+        <li>예금 · 적금 만기 세후 이자</li>
+        <li>해외주식 양도세 계산 (250만원 공제, 22%)</li>
+        <li>중복 결제 · 수수료 · 오른 구독료 알림</li>
+      </ul>
+      <div class="btns"><a class="btn primary" href="household/">바로 쓰기</a><a class="btn dl" data-file="moa-household.html" href="household/index.html" download="moa-household.html">파일로 받기</a></div>
+    </section>
+    <section class="app biz">
+      <span class="who">회사용</span>
+      <h2>돈흐름 장부</h2>
+      <ul>
+        <li>통장 · 법인카드 · 세금계산서를 합친 월 결산</li>
+        <li>못 받은 돈(미수금) 자동 찾기</li>
+        <li>헷갈리는 거래 분류와 회사 규칙 저장</li>
+        <li>자금일보와 위하고용 전표 엑셀</li>
+        <li>연습용 세금계산서 발행</li>
+      </ul>
+      <div class="btns"><a class="btn primary" href="company/">바로 쓰기</a><a class="btn dl" data-file="money-ledger.html" href="company/index.html" download="money-ledger.html">파일로 받기</a></div>
+    </section>
+  </div>
+
+  <div class="info">
+    <div><h3>내 데이터는 내 브라우저에만</h3><p>서버가 없어요. 입력한 내용은 쓰는 사람의 브라우저에만 저장돼서, 같은 링크를 쓰는 가족이나 친구에게도 보이지 않아요.</p></div>
+    <div><h3>파일로 받아서 쓰기</h3><p>'파일로 받기'로 받은 HTML 파일을 더블클릭하면 브라우저에서 열려요. 글꼴과 엑셀 기능 때문에 인터넷 연결은 필요해요.</p></div>
+    <div><h3>백업은 꼭</h3><p>브라우저 기록을 지우면 데이터가 사라질 수 있어요. 각 앱의 설정에서 백업 파일을 받아 두세요.</p></div>
+  </div>
+
+  <footer>세금 계산은 2026년 기준 참고용이에요. 실제 신고는 홈택스나 세무사에게 확인하세요. · <a id="repo" href="#">GitHub 저장소</a></footer>
+</div>
+<script>
+// GitHub Pages(아이디.github.io/저장소)에서는 '파일로 받기'를 최신 릴리스 파일로 연결해요.
+(function () {
+  var h = location.hostname, seg = location.pathname.split('/').filter(Boolean);
+  if (!/\.github\.io$/.test(h)) { document.getElementById('repo').hidden = true; return; }
+  var owner = h.split('.')[0], repo = seg[0] || (owner + '.github.io'), base = 'https://github.com/' + owner + '/' + repo;
+  document.getElementById('repo').href = base;
+  document.querySelectorAll('a.dl').forEach(function (a) { a.href = base + '/releases/latest/download/' + a.dataset.file; a.removeAttribute('download'); });
+})();
+</script>
+</body>
+</html>

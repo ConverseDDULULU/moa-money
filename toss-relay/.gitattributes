@@ -1,0 +1,2 @@
+# Windows 배치 파일은 CRLF 그대로 저장해요 (GitHub Pages·ZIP으로 받아도 줄바꿈이 깨지지 않게)
+*.bat -text

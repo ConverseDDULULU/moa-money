@@ -37,3 +37,15 @@
 - 기록은 브라우저에서 AES-GCM으로 암호화한 뒤 올려요. 열쇠는 링크의 `#` 뒤에만 있어서 서버로 가지 않아요. 서버(Cloudflare Worker, `sync-worker/`)는 암호문만 보관해요.
 - 두 기기에서 따로 고쳐도 기록 단위로 합쳐요(나중에 고친 쪽 우선, 지운 기록은 지움 유지).
 - 링크는 비밀번호와 같아요. 다른 사람에게 보내지 마세요.
+
+## 증권사 연결 (모아 가계부 › 주식 · 양도세)
+
+조회만 해요(주문 기능 없음). 키는 각자 기기 브라우저에만 저장돼요.
+
+| 증권사 | 방식 | 준비 |
+|---|---|---|
+| 한국투자증권 | Cloudflare 중계(`sync-worker/`의 `/kis/`, 조회 5가지만 허용) | Open API 신청 → App Key·Secret |
+| 키움증권 | 브라우저에서 키움 API 직접 호출 | REST API 신청 → App Key·Secret Key, **집 와이파이 IP 등록** |
+| 토스증권 | 집 PC의 중계 프로그램(`toss-relay/`) | PC 웹 → Open API → Client ID·Secret, **집 PC IP 등록**, [toss-relay.zip](../../releases/latest/download/toss-relay.zip) 실행 |
+
+모듈 약속은 `household/brokers/README.md`에 있어요.

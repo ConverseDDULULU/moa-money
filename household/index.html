@@ -82,6 +82,7 @@ main.wrap{padding-block:22px 80px}
 :where(button,a,select,input,summary,label.btn):focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 select,input{font:inherit;color:var(--ink);background:var(--surface);border:1px solid var(--line-2);border-radius:7px;padding:6px 10px;min-width:0;max-width:100%}
 input[type="checkbox"]{width:16px;height:16px;accent-color:var(--accent)}
+textarea{display:block;width:100%;min-height:120px;resize:vertical;font:13px/1.55 var(--f-body);color:var(--ink);background:var(--surface);border:1px solid var(--line-2);border-radius:7px;padding:10px 12px}
 .seg{display:inline-flex;border:1px solid var(--line-2);border-radius:8px;padding:2px;background:var(--sunk)}
 .seg button{border:0;background:none;padding:5px 11px;border-radius:6px;font:inherit;font-size:13px;color:var(--ink-2);cursor:pointer;white-space:nowrap}
 .seg button[aria-pressed="true"]{background:var(--surface);color:var(--ink);font-weight:700;box-shadow:0 1px 2px rgb(0 0 0 / .1)}
@@ -620,6 +621,17 @@ function vLedger() {
       ${formActions('tx', '기록하기')}
     </form>
   </div>
+  <div class="card" id="sms-card"><div class="card-head"><h2>카드 문자 붙여넣기</h2><span class="meta">승인 문자를 여러 개 한 번에 붙여넣으면 날짜·가게·금액을 읽어서 넣어요</span></div>
+    <label class="sr" for="sms-text">카드 문자</label>
+    <textarea id="sms-text" rows="5" placeholder="[Web발신]&#10;신한카드(1234)승인 김*수 6,100원(일시불)11/14 08:42 스타벅스 누적512,300원">${esc(S.smsText || '')}</textarea>
+    <div class="btns" style="margin-top:10px"><button type="button" class="btn primary" data-act="sms-read">문자 읽기</button><button type="button" class="btn" data-act="sms-example">예시 문자 넣어 보기</button>${S.smsText ? '<button type="button" class="link-btn" data-act="sms-clear">비우기</button>' : ''}</div>
+    ${S.sms ? smsPreview() : ''}
+    <details class="help" style="margin-top:12px"><summary>문자는 어떻게 복사하나요?</summary><ul>
+      <li><b>휴대폰에서 이 사이트를 열면 가장 편해요.</b> 문자 앱에서 카드사 대화방을 열고, 메시지를 길게 눌러 여러 개 선택한 뒤 복사해서 여기에 붙여넣으세요.</li>
+      <li>컴퓨터에서 쓸 때는 복사한 문자를 카카오톡 '나와의 채팅'이나 메모 앱으로 보낸 뒤 붙여넣으면 돼요.</li>
+      <li>신한·KB국민·삼성·현대·롯데·하나·우리·BC·NH 카드 승인 문자와 은행 입출금 알림을 읽어요. 승인취소 문자는 같은 금액의 결제를 찾아서 지워요.</li>
+    </ul></details>
+  </div>
   <div class="grid-wide">
     <div class="card"><div class="card-head"><h2>내역 ${S.ledFilter ? `<button type="button" class="chip acc" data-act="clear-led">${esc(S.ledFilter)}만 보는 중 ✕</button>` : ''}</h2><span class="meta">${list.length}건</span></div>
       ${days.length ? days.map(g => { const o = sum(g.items.filter(t => t.type === 'out'), 'amount'), i = sum(g.items.filter(t => t.type === 'in'), 'amount'); return `<div class="dayh"><span>${fmtD(g.d)}</span><span class="num">${i ? `<span class="pos">+${won(i)}</span> ` : ''}${o ? `−${won(o)}` : ''}</span></div><div class="list">${g.items.map(t => `<div class="li"><span class="chip ${t.type === 'in' ? 'acc' : t.type === 'save' ? 'ok' : 'muted'}">${esc(t.cat)}</span><span>${esc(t.memo)} <span class="meta">${esc(t.method || '')}</span></span><span class="amt ${amtCls(t)}">${amtTxt(t)}</span><span class="acts"><button type="button" class="link-btn" data-edit="tx:${esc(t.id)}">고치기</button>${delBtn('tx:' + t.id)}</span></div>`).join('')}</div>`; }).join('') : '<p class="meta">이 달에 쓴 내역이 없어요. 위에서 첫 내역을 써 보세요.</p>'}
@@ -928,6 +940,136 @@ function commitUpload() {
   toast(added ? `${added}건을 내 가계부에 넣었어요` : '이미 들어 있는 내역이라 새로 넣은 게 없어요'); render();
 }
 
+/* ───────── 카드 문자 붙여넣기 ───────── */
+const ISSUERS = '신한|KB국민|국민|삼성|현대|롯데|하나|우리|BC|비씨|NH|농협|씨티|IBK|기업|카카오뱅크|토스|케이뱅크';
+const SMS_START = new RegExp(`\\[Web발신\\]|\\[국외발신\\]|^\\s*\\[?(${ISSUERS})`);
+const SMS_AMT = /[\d,]+\s*원|(입금|출금)\s*[\d,]+|(USD|US\$|EUR|JPY|CNY)\s*[\d.,]+/i;
+const SMS_EXAMPLE = `[Web발신]
+신한카드(1234)승인 김*수 6,100원(일시불)11/14 08:42 스타벅스 역삼점 누적512,300원
+
+[Web발신]
+KB국민카드5678승인
+김*수님
+23,400원 일시불
+11/14 19:05
+쿠팡이츠
+누적535,700원
+
+[Web발신]
+현대카드 승인
+김*수
+48,900원 일시불
+11/15 14:21
+무신사
+누적584,600원
+
+[Web발신]
+현대카드 승인취소
+김*수
+48,900원
+11/15 18:02
+무신사
+
+[Web발신]
+신한카드(1234)해외승인 김*수 USD 12.99 11/15 09:10 NETFLIX.COM
+
+[Web발신]
+[하나은행] 11/15 10:00 123-***-456789 입금 45,000 잔액 1,909,200 당근페이`;
+function splitSms(text) {
+  const msgs = []; let cur = [];
+  const flush = () => { const s = cur.join(' ').replace(/\s+/g, ' ').trim(); if (s) msgs.push(s); cur = []; };
+  for (const raw of String(text || '').replace(/\r/g, '').split('\n')) {
+    const ln = raw.trim();
+    if (!ln) { flush(); continue; }
+    if (SMS_START.test(ln) && SMS_AMT.test(cur.join(' '))) flush();
+    cur.push(ln);
+  }
+  flush();
+  return msgs.flatMap(m => m.split(/(?=\[Web발신\])/).map(s => s.trim())).filter(s => s && s !== '[Web발신]');
+}
+function cleanMerchant(s) {
+  return (' ' + s + ' ')
+    .replace(/\[[^\]]*\]/g, ' ')
+    .replace(/(총?누적|잔액|한도|사용가능)\s*:?\s*[\d,]+\s*원?/g, ' ')
+    .replace(/(USD|US\$|EUR|JPY|CNY)\s*[\d.,]+/gi, ' ')
+    .replace(/(입금|출금)\s*[\d,]+\s*원?/g, ' ')
+    .replace(/[\d,]+\s*원/g, ' ')
+    .replace(/\(?\s*(일시불|\d{1,2}\s*개월|할부)\s*\)?/g, ' ')
+    .replace(/\S*\*\S*/g, ' ')
+    .replace(/\d{1,2}\/\d{1,2}|\d{1,2}:\d{2}(:\d{2})?/g, ' ')
+    .replace(new RegExp(`(${ISSUERS})카드(\\(\\d{3,4}\\)|\\d{3,4})?`, 'g'), ' ')
+    .replace(new RegExp(`(${ISSUERS})(\\(\\d{3,4}\\)|\\d{3,4})`, 'g'), ' ')
+    .replace(/(해외)?(체크)?(승인취소|승인|취소)/g, ' ')
+    .replace(/(^|\s)(\d{3,4}|일시불|입금|출금|체크|님)(?=\s|$)/g, ' ')
+    .replace(/\s+/g, ' ').trim();
+}
+function parseSmsOne(m) {
+  const T = today(), y0 = Number(T.slice(0, 4));
+  let date = null, x;
+  if ((x = m.match(/(20\d{2})[.\/-](\d{1,2})[.\/-](\d{1,2})/))) date = `${x[1]}-${p2(x[2])}-${p2(x[3])}`;
+  else if ((x = m.match(/(?:^|\D)(\d{1,2})\/(\d{1,2})(?!\d)/) || m.match(/(\d{1,2})\.(\d{1,2})\s+\d{1,2}:\d{2}/) || m.match(/(\d{1,2})월\s*(\d{1,2})일/))) {
+    const mo = Number(x[1]), d = Number(x[2]);
+    if (mo >= 1 && mo <= 12 && d >= 1 && d <= 31) { date = `${y0}-${p2(mo)}-${p2(d)}`; if (date > T) date = `${y0 - 1}-${p2(mo)}-${p2(d)}`; }
+  }
+  const tm = m.match(/\d{1,2}:\d{2}(:\d{2})?/), tIdx = tm ? m.indexOf(tm[0]) : -1;
+  let amount = 0, type = 'out', foreign = null, wonAmt = null, mm; const re = /([\d,]+)\s*원/g;
+  while ((mm = re.exec(m))) { if (/누적|잔액|한도|가능/.test(m.slice(Math.max(0, mm.index - 5), mm.index))) continue; wonAmt = parseAmt(mm[1]); break; }
+  const bank = m.match(/(입금|출금)\s*([\d,]+)/);
+  if (bank) { type = bank[1] === '입금' ? 'in' : 'out'; if (!wonAmt) wonAmt = parseAmt(bank[2]); }
+  const fx = m.match(/(USD|US\$|EUR|JPY|CNY)\s*([\d,]+(?:\.\d+)?)/i);
+  if (wonAmt) amount = wonAmt;
+  else if (fx) { const cur = fx[1].toUpperCase().replace('US$', 'USD'); foreign = { cur, v: parseFloat(fx[2].replace(/,/g, '')) }; if (cur === 'USD') amount = Math.round(foreign.v * (Number(S.d.settings.fx) || 0)); }
+  const cancel = /취소/.test(m);
+  let memo = cleanMerchant(tIdx >= 0 ? m.slice(tIdx + tm[0].length) : m);
+  if (!memo && tIdx >= 0) memo = cleanMerchant(m.slice(0, tIdx));
+  if (foreign) memo = `${memo || '해외 결제'} (${foreign.cur} ${foreign.v})`;
+  if (bank && type === 'out' && guessType(memo) === 'save') type = 'save';
+  const head = m.slice(0, tIdx >= 0 ? tIdx : 40), iss = head.match(new RegExp(ISSUERS));
+  const issuer = iss ? (iss[0] === '국민' ? 'KB국민' : iss[0] === '비씨' ? 'BC' : iss[0]) : '';
+  const method = bank ? (issuer ? `${issuer} 계좌` : '계좌') : (issuer ? `${issuer}카드` : '카드');
+  return { raw: m, date: date || T, noDate: !date, memo: memo || '(가게 이름 없음)', amount, type, cancel, foreign, method, cat: guessCat(memo, type) };
+}
+function readSms(text) {
+  const items = splitSms(text).map(parseSmsOne);
+  const key = t => [t.date, normKey(t.memo), t.amount, t.type].join('|'), cnt = new Map(), seen = new Map();
+  for (const t of S.d.tx) cnt.set(key(t), (cnt.get(key(t)) || 0) + 1);
+  const near = (a, b) => { const k1 = normKey(a), k2 = normKey(b); return k1 && k2 && (k1 === k2 || k1.includes(k2) || k2.includes(k1)); };
+  const usedTx = new Set();
+  for (const it of items) {
+    if (!it.amount) { it.status = 'bad'; continue; }
+    if (it.cancel) {
+      const prior = items.find(o => o !== it && !o.cancel && o.status === 'new' && o.amount === it.amount && near(o.memo, it.memo) && o.date <= it.date);
+      if (prior) { prior.status = 'voided'; it.status = 'cancel-batch'; continue; }
+      const tx = S.d.tx.find(t => !usedTx.has(t.id) && t.type === 'out' && t.amount === it.amount && near(t.memo, it.memo) && t.date <= it.date && D.diff(it.date, t.date) <= 62);
+      if (tx) { usedTx.add(tx.id); it.status = 'cancel-tx'; it.matchId = tx.id; it.matchDate = tx.date; } else it.status = 'cancel-none';
+      continue;
+    }
+    const k = key(it), s = (seen.get(k) || 0) + 1; seen.set(k, s);
+    it.status = s > (cnt.get(k) || 0) ? 'new' : 'dup';
+  }
+  return items;
+}
+const SMS_ST = { new: ['acc', '새 내역'], dup: ['muted', '이미 있음'], bad: ['crit', '못 읽음'], voided: ['muted', '취소됨'], 'cancel-batch': ['warn', '취소 (같이 붙여넣은 결제)'], 'cancel-tx': ['warn', '취소 → 결제 지움'], 'cancel-none': ['muted', '취소 (짝 없음)'] };
+function smsPreview() {
+  const items = S.sms || [], nNew = items.filter(i => i.status === 'new').length, nDel = items.filter(i => i.status === 'cancel-tx').length;
+  if (!items.length) return '<p class="note warn" style="margin-top:10px">읽을 문자를 찾지 못했어요. 카드사 승인 문자를 그대로 붙여넣어 주세요.</p>';
+  return `<div class="preview" style="margin-top:12px"><p><b>${items.length}개</b> 문자를 읽었어요 · 새 내역 ${nNew}건${nDel ? ` · 취소로 지울 결제 ${nDel}건` : ''}${S.ws === 'sample' ? ' · <span class="meta">지금은 예시 가계부에 들어가요(새로고침하면 사라져요)</span>' : ''}</p>
+    ${table(['상태', '날짜', '내용', '분류', '금액'], items.map((it, i) => [`<span class="chip ${SMS_ST[it.status][0]}">${SMS_ST[it.status][1]}</span>`, `${it.date}${it.noDate ? '<span class="src">날짜가 없어 오늘로</span>' : ''}`, `${esc(it.memo)}<span class="src">${esc(it.method)}${it.status === 'cancel-tx' ? ` · ${it.matchDate} 결제를 지워요` : ''}</span>`, it.status === 'new' ? `<select data-smscat="${i}" aria-label="${esc(it.memo)} 분류">${catOpts(it.type, it.cat)}</select>` : `<span class="meta">${esc(it.cat)}</span>`, it.amount ? `${it.type === 'in' ? '+' : '−'}${won(it.amount)}` : '<span class="meta">–</span>']), [0, 0, 0, 0, 1])}
+    ${items.some(i => i.foreign) ? `<p class="meta">해외 결제는 현재 환율(1달러 ${won(S.d.settings.fx)}원)로 바꾼 금액이에요. 실제 청구액은 카드 명세서에서 확인하세요.</p>` : ''}
+    <div class="btns"><button type="button" class="btn primary" data-act="sms-commit"${nNew + nDel ? '' : ' disabled'}>${nNew ? `${nNew}건 가계부에 넣기` : '넣을 새 내역 없음'}${nDel ? ` · ${nDel}건 지우기` : ''}</button><button type="button" class="btn" data-act="sms-cancel">취소</button></div></div>`;
+}
+function commitSms() {
+  const items = S.sms || []; let added = 0, removed = 0;
+  for (const it of items) {
+    if (it.status === 'new') { S.d.tx.push({ id: uid('t'), date: it.date, type: it.type, cat: it.cat, memo: it.memo, amount: it.amount, method: it.method }); added++; }
+    else if (it.status === 'cancel-tx') { const i = S.d.tx.findIndex(t => t.id === it.matchId); if (i >= 0) { S.d.tx.splice(i, 1); removed++; } }
+  }
+  S.d.tx.sort(byDate); save();
+  const last = items.filter(i => i.status === 'new').map(i => i.date).sort().pop(); if (last) S.month = last.slice(0, 7);
+  S.sms = null; S.smsText = '';
+  toast(`${added}건을 넣었어요${removed ? ` · 취소된 결제 ${removed}건을 지웠어요` : ''}`); render();
+}
+
 /* ───────── 파일 저장 ───────── */
 async function saveFile(filename, data) {
   if (window.claude && window.claude.use) {
@@ -1070,6 +1212,11 @@ document.addEventListener('click', e => {
   const acts = {
     'cancel-edit': () => { S.edit = null; render(); }, 'clear-led': () => { S.ledFilter = null; render(); },
     'dl-ledger': dlLedger, 'dl-tax': dlTax, backup: doBackup, 'fx-latest': () => refreshFx(false), 'fx-trade': fillTradeFx,
+    'sms-read': () => { S.smsText = $('#sms-text')?.value || ''; if (!S.smsText.trim()) { toast('문자를 먼저 붙여넣어 주세요'); return; } S.sms = readSms(S.smsText); render(); $('#sms-card')?.scrollIntoView({ block: 'start' }); },
+    'sms-example': () => { S.smsText = SMS_EXAMPLE; S.sms = null; render(); },
+    'sms-clear': () => { S.smsText = ''; S.sms = null; render(); },
+    'sms-cancel': () => { S.sms = null; render(); },
+    'sms-commit': commitSms,
     'up-commit': commitUpload, 'up-cancel': () => { S.upload = null; render(); },
     clear: () => { S.confirmClear = true; render(); }, 'clear-no': () => { S.confirmClear = false; render(); },
     'clear-yes': () => { LS.del(K('mine')); S.confirmClear = false; if (S.ws === 'mine') loadWS('mine'); toast('내 가계부를 지웠어요'); render(); }
@@ -1089,12 +1236,14 @@ document.addEventListener('change', async e => {
   if (t.id === 'month') { S.month = t.value; S.ledFilter = null; render(); }
   else if (t.id === 'tx-type') { $('#tx-cat').innerHTML = catOpts(t.value, null, !editing('tx')); S.txType = t.value; }
   else if (t.id === 'tax-year') { S.taxYear = Number(t.value); render(); }
+  else if (t.dataset.smscat) { const it = S.sms && S.sms[Number(t.dataset.smscat)]; if (it) it.cat = t.value; }
   else if (t.id === 'fx-now') { Object.assign(S.d.settings, { fx: parseFloat(t.value.replace(/,/g, '')) || 0, fxSource: 'manual', fxAt: null }); save(); render(); toast('환율을 직접 넣었어요. 자동 갱신은 멈춰요'); }
   else if (t.dataset.price) { const v = parseFloat(t.value.replace(/,/g, '')); if (v > 0) S.d.prices[t.dataset.price] = { price: v, at: today() }; else delete S.d.prices[t.dataset.price]; save(); render(); toast('현재가를 넣었어요'); }
   else if (t.dataset.bal) { const a = S.d.accounts.find(x => x.id === t.dataset.bal); if (a) { a.balance = parseAmt(t.value); a.at = today(); save(); render(); toast('잔액을 고쳤어요'); } }
   else if (t.id === 'up-file') { const f = t.files && t.files[0]; if (f) await handleUpload(f); }
   else if (t.id === 'restore-file') { const f = t.files && t.files[0]; if (f) await doRestore(f); }
 });
+document.addEventListener('input', e => { if (e.target.id === 'sms-text') S.smsText = e.target.value; });
 window.addEventListener('hashchange', () => { const h = location.hash.slice(1); if (VIEWS.includes(h) && h !== S.tab) { S.tab = h; S.edit = null; render(); window.scrollTo(0, 0); } });
 function init() {
   loadWS(LS.get(K('ws'), 'sample') === 'mine' ? 'mine' : 'sample');

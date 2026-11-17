@@ -192,6 +192,9 @@ td input{padding:4px 8px;font-size:12.5px;width:110px;text-align:right;font-fami
   .form .wide{grid-column:auto}
   .bar-tools{margin-left:0;width:100%}
 }
+.upd{display:flex;gap:10px 16px;align-items:center;justify-content:space-between;flex-wrap:wrap;padding:14px 16px;border-radius:10px;background:var(--accent-soft);border:1px solid var(--accent);color:var(--ink)}
+.upd p{margin:4px 0 0;font-size:13px;color:var(--ink-2)}
+.upd-btns{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 @media (prefers-reduced-motion: reduce){ *{transition:none!important;scroll-behavior:auto!important} }
 </style>
 
@@ -1842,6 +1845,36 @@ function init() {
   setInterval(() => { if (document.visibilityState !== 'hidden') inboxPoll(); }, 3 * 60 * 1000);
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') inboxPoll(); });
 }
+/* ───────── 새 버전 알림 (내려받은 파일에서만, 12시간에 한 번 확인) ───────── */
+const APP_VERSION = 'v1.8';
+(function updateCheck(fileName, keyPrefix) {
+  if (location.protocol !== 'file:' || APP_VERSION === 'dev') return;
+  const LSK = keyPrefix + 'update', SITE = 'https://converseddululu.github.io/moa-money/';
+  const DL = 'https://github.com/ConverseDDULULU/moa-money/releases/latest/download/' + fileName;
+  let st = {}; try { st = JSON.parse(localStorage.getItem(LSK) || '{}') || {}; } catch { st = {}; }
+  const keep = () => { try { localStorage.setItem(LSK, JSON.stringify(st)); } catch {} };
+  const nums = s => (String(s).match(/\d+/g) || []).map(Number);
+  const newer = (a, b) => { const x = nums(a), y = nums(b); for (let i = 0; i < Math.max(x.length, y.length); i++) { const d = (x[i] || 0) - (y[i] || 0); if (d) return d > 0; } return false; };
+  let shown = false;
+  function show(tag) {
+    if (shown || st.dismissed === tag || !newer(tag, APP_VERSION)) return;
+    const main = document.querySelector('main'); if (!main) return;
+    shown = true;
+    const box = document.createElement('div');
+    box.className = 'upd'; box.setAttribute('role', 'status');
+    box.innerHTML = `<div><b>새 버전이 나왔어요 (${String(tag).replace(/[<>&"]/g, '')})</b><p>지금 쓰는 파일은 ${APP_VERSION}이에요. 새 파일을 받아서 이 파일 대신 열면 돼요. 같은 브라우저로 열면 기록은 그대로예요. 걱정되면 먼저 백업 파일을 받아 두세요.</p></div>
+      <div class="upd-btns"><a class="btn primary" href="${DL}">새 파일 받기</a><a class="btn" href="${SITE}" target="_blank" rel="noopener">사이트로 열기</a><button type="button" class="link-btn" data-upd-later>나중에</button></div>`;
+    main.prepend(box);
+    const later = box.querySelector('[data-upd-later]');
+    if (later) later.addEventListener('click', () => { st.dismissed = tag; keep(); box.remove(); });
+  }
+  if (st.latest) show(st.latest);
+  if (st.at && Date.now() - st.at < 12 * 3600 * 1000) return;
+  fetch('https://api.github.com/repos/ConverseDDULULU/moa-money/releases/latest', { headers: { Accept: 'application/vnd.github+json' } })
+    .then(r => (r.ok ? r.json() : null))
+    .then(j => { if (!j || !j.tag_name) return; st.latest = String(j.tag_name); st.at = Date.now(); keep(); show(st.latest); })
+    .catch(() => {});
+})('moa-household.html', 'moa.v1.');
 if (!window.__MOA_TEST__) init();
 </script>
 

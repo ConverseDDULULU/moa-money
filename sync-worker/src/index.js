@@ -3,6 +3,10 @@
 // GET    /v1/:id  → { v, iv, data, at }
 // PUT    /v1/:id  → body { base, iv, data }, 헤더 X-Write-Token (처음 쓴 사람의 토큰과 같아야 함)
 // DELETE /v1/:id  → 헤더 X-Write-Token
+// /in/..., /inbox/... → 알림 받은편지함 (src/inbox.js, INBOX.md)
+import { handleInbox } from './inbox.js';
+export { Inbox } from './inbox.js';
+
 const CORS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET,PUT,DELETE,OPTIONS',
@@ -58,6 +62,7 @@ export default {
   async fetch(req, env) {
     const p = new URL(req.url).pathname;
     if (p.startsWith('/kis/')) return kisRelay(req, p.slice(4));
+    if (/^\/(in|inbox)(\/|$)/.test(p)) return handleInbox(req, env, p);
     if (req.method === 'OPTIONS') return new Response(null, { headers: CORS });
     const m = new URL(req.url).pathname.match(/^\/v1\/([A-Za-z0-9_-]{16,64})$/);
     if (!m) return json({ error: 'not_found' }, 404);

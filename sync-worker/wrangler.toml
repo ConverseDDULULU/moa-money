@@ -6,3 +6,12 @@ workers_dev = true
 [[kv_namespaces]]
 binding = "MOA_SYNC"
 id = "e7eaf235464f40c0b4f0692c507bd843"
+
+# 알림 받은편지함: 받은편지함 하나 = Durable Object 하나 (SQLite 저장, 무료 플랜 가능)
+[[durable_objects.bindings]]
+name = "INBOX"
+class_name = "Inbox"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Inbox"]

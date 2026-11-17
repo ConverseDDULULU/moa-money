@@ -653,7 +653,9 @@ function vLedger() {
       <li>컴퓨터에서 쓸 때는 복사한 문자를 카카오톡 '나와의 채팅'이나 메모 앱으로 보낸 뒤 붙여넣으면 돼요.</li>
       <li>신한·KB국민·삼성·현대·롯데·하나·우리·BC·NH 카드 승인 문자와 은행 입출금 알림을 읽어요. 승인취소 문자는 같은 금액의 결제를 찾아서 지워요.</li>
     </ul></details>
+    ${IN_CLAUDE ? '' : inboxOn() ? '<p class="meta" style="margin-top:8px"><span class="chip ok">알림 자동 받기 켜짐</span> 휴대폰에 오는 카드 알림이 자동으로 들어와요.</p>' : '<p class="meta" style="margin-top:8px">붙여넣기도 귀찮다면 <a href="#data">설정 · 데이터 → 알림 자동 받기</a>를 켜 보세요. 휴대폰 알림이 자동으로 들어와요.</p>'}
   </div>
+  ${(() => { const auto = ms.tx.filter(t => String(t.id).startsWith('in-')).sort((a, b) => -byDate(a, b)).slice(0, 8); return auto.length ? `<div class="card"><div class="card-head"><h2>알림으로 자동으로 들어온 내역</h2><span class="meta">이 달 ${ms.tx.filter(t => String(t.id).startsWith('in-')).length}건 · 잘못 들어온 건 지워 주세요</span></div><div class="list">${auto.map(t => `<div class="li"><span class="chip ${t.type === 'in' ? 'acc' : 'muted'}">${esc(t.cat)}</span><span>${esc(t.memo)} <span class="meta">${fmtDs(t.date)} · ${esc(t.method || '')}</span></span><span class="amt">${t.type === 'in' ? '+' : '−'}${won(t.amount)}</span><span class="acts"><button type="button" class="link-btn" data-edit="tx:${esc(t.id)}">고치기</button>${delBtn('tx:' + t.id)}</span></div>`).join('')}</div></div>` : ''; })()}
   <div class="grid-wide">
     <div class="card"><div class="card-head"><h2>내역 ${S.ledFilter ? `<button type="button" class="chip acc" data-act="clear-led">${esc(S.ledFilter)}만 보는 중 ✕</button>` : ''}</h2><span class="meta">${list.length}건</span></div>
       ${days.length ? days.map(g => { const o = sum(g.items.filter(t => t.type === 'out'), 'amount'), i = sum(g.items.filter(t => t.type === 'in'), 'amount'); return `<div class="dayh"><span>${fmtD(g.d)}</span><span class="num">${i ? `<span class="pos">+${won(i)}</span> ` : ''}${o ? `−${won(o)}` : ''}</span></div><div class="list">${g.items.map(t => `<div class="li"><span class="chip ${t.type === 'in' ? 'acc' : t.type === 'save' ? 'ok' : 'muted'}">${esc(t.cat)}</span><span>${esc(t.memo)} <span class="meta">${esc(t.method || '')}</span></span><span class="amt ${amtCls(t)}">${amtTxt(t)}</span><span class="acts"><button type="button" class="link-btn" data-edit="tx:${esc(t.id)}">고치기</button>${delBtn('tx:' + t.id)}</span></div>`).join('')}</div>`; }).join('') : '<p class="meta">이 달에 쓴 내역이 없어요. 위에서 첫 내역을 써 보세요.</p>'}
@@ -880,6 +882,7 @@ function vData() {
   el.innerHTML = `
   <div class="page-head"><div><h1>설정 · 데이터</h1><p class="meta">지금 보는 가계부: <b>${S.ws === 'sample' ? '예시 가계부 (새로고침하면 처음으로 돌아가요)' : '내 가계부'}</b></p></div>${S.ws === 'sample' ? '<button type="button" class="btn primary" data-ws="mine">내 가계부 시작하기</button>' : ''}</div>
   ${syncCard()}
+  ${inboxCard()}
   <div class="grid2">
     <div class="card"><h2>내 정보</h2>
       <form class="form" data-form="profile" style="margin-top:12px">
@@ -1316,6 +1319,7 @@ function mergeDocs(a, b) { // a = 서버, b = 이 기기. 같은 기록은 나�
   out.prices = { ...(a.prices || {}) }; for (const [t, p] of Object.entries(b.prices || {})) { const q = out.prices[t]; if (!q || (p.t || 0) >= (q.t || 0)) out.prices[t] = p; }
   for (const t of Object.keys(out.prices)) if (del['price:' + t] && del['price:' + t] >= (out.prices[t].t || 0)) delete out.prices[t];
   for (const k of ['profile', 'settings']) out[k] = ((b[k] && b[k].mt) || 0) >= ((a[k] && a[k].mt) || 0) ? b[k] : a[k];
+  out.inbox = ((b.inbox && b.inbox.at) || 0) >= ((a.inbox && a.inbox.at) || 0) ? b.inbox : a.inbox;
   out.brokers = { ...(a.brokers || {}) }; for (const [id, v] of Object.entries(b.brokers || {})) { const w = out.brokers[id]; if (!w || ((v && v.at) || 0) >= ((w && w.at) || 0)) out.brokers[id] = v; }
   return out;
 }
@@ -1572,6 +1576,109 @@ async function brokerSimulate(id) {
   render(); setTimeout(() => $('#broker-card')?.scrollIntoView({ block: 'start' }), 50);
 }
 
+/* ───────── 알림 자동 받기 (휴대폰 자동화 → 받은편지함 → 가계부, 약속은 sync-worker/INBOX.md) ───────── */
+const INBOX_API = SYNC_API.replace(/v1\/$/, '');
+let inboxBusy = false, inboxState = { status: '', lastCheck: 0, lastGot: 0 };
+const inboxOn = () => !!(S.d && S.d.inbox && !S.d.inbox.removed && S.d.inbox.id);
+const inboxUrl = () => inboxOn() ? INBOX_API + 'in/' + S.d.inbox.id : '';
+async function inboxDecrypt(priv, it) {
+  const epk = await crypto.subtle.importKey('raw', b64ToBytes(it.epk), { name: 'ECDH', namedCurve: 'P-256' }, false, []);
+  const key = await crypto.subtle.deriveKey({ name: 'ECDH', public: epk }, priv, { name: 'AES-GCM', length: 256 }, false, ['decrypt']);
+  return new TextDecoder().decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b64ToBytes(it.iv) }, key, b64ToBytes(it.ct)));
+}
+async function inboxEnable() {
+  if (IN_CLAUDE || !(window.crypto && crypto.subtle)) { toast('알림 자동 받기는 GitHub 웹사이트 버전에서 쓸 수 있어요'); return; }
+  if (S.ws !== 'mine') loadWS('mine');
+  try {
+    const kp = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, true, ['deriveKey']);
+    const pub = await crypto.subtle.exportKey('jwk', kp.publicKey), priv = await crypto.subtle.exportKey('jwk', kp.privateKey);
+    const id = toUrl(bytesToB64(crypto.getRandomValues(new Uint8Array(18)))), tok = toUrl(bytesToB64(crypto.getRandomValues(new Uint8Array(24))));
+    const r = await fetch(INBOX_API + 'inbox/' + id + '/key', { method: 'PUT', headers: { 'Content-Type': 'application/json', 'X-Owner-Token': tok }, body: JSON.stringify({ pub }) });
+    if (!r.ok) throw new Error('http ' + r.status);
+    S.d.inbox = { id, tok, pub, priv, at: Date.now() }; save();
+    toast('알림 받은편지함을 만들었어요. 아래 안내대로 휴대폰을 설정해 주세요');
+  } catch { toast('받은편지함을 만들지 못했어요. 인터넷 연결을 확인하고 다시 해 주세요'); }
+  S.tab = 'data'; render();
+}
+async function inboxDisable() {
+  const ib = S.d.inbox; if (!ib) return;
+  try { await fetch(INBOX_API + 'inbox/' + ib.id, { method: 'DELETE', headers: { 'X-Owner-Token': ib.tok } }); } catch {}
+  S.d.inbox = { at: Date.now(), removed: true }; save(); toast('알림 자동 받기를 껐어요. 휴대폰 자동화도 지워 주세요'); render();
+}
+async function inboxTest() {
+  if (!inboxOn()) return;
+  try {
+    const r = await fetch(inboxUrl(), { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=UTF-8' }, body: '[모아 시험] 신한카드(1234)승인 홍*동 1,000원(일시불) 시험 가맹점' });
+    if (!r.ok) throw new Error('http ' + r.status);
+    toast('시험 알림을 보냈어요. 받아오는 중…'); await inboxPoll(false);
+  } catch { toast('시험 알림을 보내지 못했어요. 인터넷 연결을 확인해 주세요'); }
+}
+async function inboxPoll(silent = true) {
+  if (IN_CLAUDE || S.ws !== 'mine' || !inboxOn() || inboxBusy) return;
+  inboxBusy = true; const ib = S.d.inbox;
+  try {
+    const r = await fetch(INBOX_API + 'inbox/' + ib.id, { headers: { 'X-Owner-Token': ib.tok }, cache: 'no-store' });
+    if (r.status === 403 || r.status === 404) { inboxState.status = 'gone'; if (!silent) toast('서버에 받은편지함이 없어요. 껐다가 다시 켜 주세요'); return; }
+    if (!r.ok) throw new Error('http ' + r.status);
+    const items = ((await r.json()) || {}).items || []; inboxState.lastCheck = Date.now(); inboxState.status = 'ok';
+    if (!items.length) { if (!silent) toast('새로 받은 알림이 없어요'); return; }
+    const priv = await crypto.subtle.importKey('jwk', ib.priv, { name: 'ECDH', namedCurve: 'P-256' }, false, ['deriveKey']);
+    const ack = []; let added = 0, removed = 0, tests = 0, unread = 0;
+    for (const it of items) {
+      ack.push(it.id);
+      let text; try { text = await inboxDecrypt(priv, it); } catch { unread++; continue; }
+      if (/^\s*\[모아 시험\]/.test(text)) { tests++; continue; }
+      const at = it.at ? new Date(it.at) : null, fallback = at && !isNaN(at) ? `${at.getFullYear()}-${p2(at.getMonth() + 1)}-${p2(at.getDate())}` : today();
+      markStatus(splitSms(text).map(parseSmsOne)).forEach((p, i, all) => {
+        const id = 'in-' + it.id + (all.length > 1 ? '-' + i : '');
+        if (p.status === 'new' && !S.d.tx.some(t => t.id === id)) { S.d.tx.push({ id, date: p.noDate ? fallback : p.date, type: p.type, cat: p.cat, memo: p.memo, amount: p.amount, method: p.method + ' · 자동' }); added++; }
+        else if (p.status === 'cancel-tx') { const k = S.d.tx.findIndex(t => t.id === p.matchId); if (k >= 0) { S.d.tx.splice(k, 1); removed++; } }
+      });
+    }
+    if (added || removed) { S.d.tx.sort(byDate); save(); }
+    try { await fetch(INBOX_API + 'inbox/' + ib.id + '/ack', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Owner-Token': ib.tok }, body: JSON.stringify({ ids: ack }) }); } catch {}
+    inboxState.lastGot = Date.now();
+    const parts = [added && `${added}건을 가계부에 넣었어요`, removed && `취소된 결제 ${removed}건을 지웠어요`, tests && '시험 알림이 잘 도착했어요 ✓', unread && `${unread}건은 열 수 없었어요`].filter(Boolean);
+    if (parts.length) toast('알림 ' + parts.join(' · ')); else if (!silent) toast('받은 알림 중 가계부에 넣을 내역이 없었어요');
+    render();
+  } catch { inboxState.status = 'offline'; if (!silent) toast('받은편지함에 연결하지 못했어요'); }
+  finally { inboxBusy = false; }
+}
+const INBOX_GUIDE = {
+  android: { name: '안드로이드 (갤럭시)', steps: [
+    ['MacroDroid 설치', 'Play 스토어에서 <b>MacroDroid</b>를 설치하고 처음 안내대로 권한을 허용해요. 무료 버전으로 충분해요.'],
+    ['매크로 만들기', '<b>매크로 추가</b>를 누르고 이름을 <b>모아 가계부</b>로 해요.'],
+    ['트리거: 알림 수신', '<b>트리거 ＋ → 알림 → 알림 수신</b>을 고르고, 앱은 <b>메시지(문자)</b>, 쓰는 <b>카드사 앱·은행 앱·토스</b>, 알림톡을 받는다면 <b>카카오톡</b>을 골라요. <b>텍스트 포함</b>에 <code>원</code>을 넣으면 광고 알림이 줄어요. 알림 접근 권한을 물으면 허용해요.'],
+    ['액션: HTTP 요청', '<b>액션 ＋ → 연결(Connectivity) → HTTP 요청</b>을 골라요. 방법은 <b>POST</b>, URL에는 위의 <b>받은편지함 주소</b>를 붙여넣고, 본문(내용 형식 <code>text/plain</code>)에는 <b>매직 텍스트</b> 버튼으로 <b>알림 제목</b>과 <b>알림 텍스트</b>를 넣어요.'],
+    ['저장하고 배터리 설정', '저장(✓)한 뒤 휴대폰 <b>설정 → 애플리케이션 → MacroDroid → 배터리 → 제한 없음</b>으로 바꿔요. 그래야 꾸준히 동작해요.'],
+    ['확인', '아래 <b>시험 알림 보내기</b>로 서버까지 확인하고, 다음 카드 결제 때 가계부에 자동으로 들어오는지 봐요.']] },
+  ios: { name: '아이폰', steps: [
+    ['자동화 만들기', '<b>단축어</b> 앱 → 아래쪽 <b>자동화</b> → <b>＋ (새로운 자동화)</b> → <b>메시지</b>를 골라요.'],
+    ['조건과 즉시 실행', '<b>메시지 내용 포함</b>에 <code>원</code>을 넣고(또는 <b>보낸 사람</b>에 카드사 번호), <b>즉시 실행</b>을 고르고 <b>실행 시 알림</b>은 꺼요.'],
+    ['동작: URL 콘텐츠 가져오기', '<b>새로운 빈 단축어</b> → 동작 검색에서 <b>URL 콘텐츠 가져오기</b>를 추가하고, URL에 위의 <b>받은편지함 주소</b>를 붙여넣어요.'],
+    ['보낼 내용', '동작의 <b>›</b>를 눌러 <b>방법: POST</b>, <b>요청 본문: JSON</b>으로 바꾸고, 필드 추가 → <b>텍스트</b>, 키는 <code>text</code>, 값은 <b>단축어 입력 → 메시지 → 내용</b> 변수를 넣어요.'],
+    ['완료와 확인', '<b>완료</b>를 누르면 끝이에요. 아래 <b>시험 알림 보내기</b>로 서버까지 확인해요.'],
+    ['알아 둘 점', '아이폰은 <b>문자(SMS)만</b> 받을 수 있어요. 카드 알림을 카카오톡 알림톡으로 받고 있다면 카드사 앱에서 <b>문자 알림</b>으로 바꿔야 해요(카드사에 따라 월 300원 정도 유료).']] }
+};
+function inboxCard() {
+  if (IN_CLAUDE) return '<div class="card"><h2>알림 자동 받기</h2><p class="meta" style="margin-top:8px">휴대폰 카드·은행 알림을 자동으로 받는 기능은 GitHub 웹사이트 버전에서 쓸 수 있어요.</p></div>';
+  if (!inboxOn()) return `<div class="card" id="inbox-card"><h2>알림 자동 받기</h2>
+    <p style="margin-top:8px">휴대폰에 오는 <b>카드 결제·은행 입출금 알림</b>을 받는 즉시 가계부에 자동으로 넣어요. 증권사·은행 API는 필요 없어요. 안드로이드는 MacroDroid, 아이폰은 단축어 앱으로 한 번만 설정하면 돼요.</p>
+    <p class="meta">알림 내용은 받는 순간 서버를 거치지만, 저장할 때는 이 가계부만 열 수 있게 암호화하고, 가계부가 가져가면 바로(늦어도 7일 뒤) 지워요.</p>
+    <div class="btns" style="margin-top:12px"><button type="button" class="btn primary" data-act="inbox-on">${S.ws === 'mine' ? '알림 자동 받기 켜기' : '내 가계부로 바꾸고 켜기'}</button></div></div>`;
+  const tab = S.inboxTab || 'android', g = INBOX_GUIDE[tab];
+  const last = inboxState.lastGot ? `마지막으로 받은 시각 ${new Date(inboxState.lastGot).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}` : inboxState.lastCheck ? `확인함 ${new Date(inboxState.lastCheck).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}` : '';
+  return `<div class="card" id="inbox-card"><div class="card-head"><h2>알림 자동 받기 <span class="chip ok">켜짐</span></h2><span class="meta">${esc(last)}</span></div>
+    <label class="lab" for="inbox-url">나만의 받은편지함 주소 (휴대폰 자동화에 붙여넣어요)</label>
+    <div class="btns" style="margin-top:4px"><input id="inbox-url" readonly value="${esc(inboxUrl())}" style="flex:1;min-width:220px;font-family:var(--f-num);font-size:12px"><button type="button" class="btn sm" data-act="inbox-copy">주소 복사</button></div>
+    <p class="meta" style="margin-top:6px">이 주소는 비밀번호처럼 다뤄 주세요. 아는 사람은 가짜 내역을 넣을 수 있어요(내용을 읽지는 못해요).</p>
+    <div class="seg" role="group" aria-label="휴대폰 종류" style="margin-top:14px"><button type="button" data-act="inbox-tab" data-v="android" aria-pressed="${tab === 'android'}">안드로이드</button><button type="button" data-act="inbox-tab" data-v="ios" aria-pressed="${tab === 'ios'}">아이폰</button></div>
+    <ol class="gsteps" style="margin-top:12px">${g.steps.map(([t, d], i) => `<li class="gstep"><span class="gnum">${i + 1}</span><div><b>${t}</b><p>${d}</p></div></li>`).join('')}</ol>
+    <p class="meta" style="margin-top:8px">휴대폰 화면의 메뉴 이름은 앱 버전에 따라 조금 다를 수 있어요.</p>
+    <div class="btns" style="margin-top:12px"><button type="button" class="btn primary" data-act="inbox-test">시험 알림 보내기</button><button type="button" class="btn" data-act="inbox-poll">지금 받아오기</button>${S.armed === 'inbox:off' ? '<button type="button" class="link-btn danger" data-act="inbox-off">정말 끌까요? 서버의 받은편지함도 지워요</button>' : '<button type="button" class="link-btn danger" data-act="inbox-off">알림 자동 받기 끄기</button>'}</div>
+  </div>`;
+}
+
 /* ───────── 저장 폼 ───────── */
 const FORMS = {
   tx(v) {
@@ -1646,7 +1753,7 @@ document.addEventListener('click', e => {
     if (i >= 0) arr.splice(i, 1); S.armed = null; if (S.edit?.obj?.id === id) S.edit = null; save(); toast('지웠어요'); render(); return;
   }
   if (S.armed) S.armed = null;
-  if (b.dataset.ws) { if (b.dataset.ws !== S.ws) { loadWS(b.dataset.ws); maybeAutoFx(); if (S.ws === 'mine' && SY) syncPull(); if (S.ws === 'mine' && !S.d.tx.length && !S.d.accounts.length) { S.tab = 'data'; location.hash = 'data'; } render(); toast(S.ws === 'sample' ? '예시 가계부를 보고 있어요' : '내 가계부를 보고 있어요'); } return; }
+  if (b.dataset.ws) { if (b.dataset.ws !== S.ws) { loadWS(b.dataset.ws); maybeAutoFx(); if (S.ws === 'mine' && SY) syncPull(); if (S.ws === 'mine') inboxPoll(); if (S.ws === 'mine' && !S.d.tx.length && !S.d.accounts.length) { S.tab = 'data'; location.hash = 'data'; } render(); toast(S.ws === 'sample' ? '예시 가계부를 보고 있어요' : '내 가계부를 보고 있어요'); } return; }
   if (b.dataset.edit) { const [kind, id] = b.dataset.edit.split(':'), obj = S.d[COLL[kind]].find(x => x.id === id); if (obj) { S.edit = { kind, obj }; render(); document.querySelector(`form[data-form="${kind}"]`)?.closest('.card')?.scrollIntoView({ block: 'start' }); } return; }
   if (b.dataset.led !== undefined) { S.ledFilter = S.ledFilter === b.dataset.led ? null : b.dataset.led; if (S.tab !== 'ledger') { S.tab = 'ledger'; location.hash = 'ledger'; } render(); return; }
   if (b.dataset.method) { S.d.settings.costMethod = b.dataset.method; save(); render(); toast(b.dataset.method === 'fifo' ? '선입선출법으로 계산해요' : '이동평균법으로 계산해요'); return; }
@@ -1658,6 +1765,12 @@ document.addEventListener('click', e => {
     'sms-clear': () => { S.smsText = ''; S.sms = null; render(); },
     'sms-cancel': () => { S.sms = null; render(); },
     'sms-commit': commitSms,
+    'inbox-on': () => inboxEnable(),
+    'inbox-off': () => { if (S.armed !== 'inbox:off') { S.armed = 'inbox:off'; render(); return; } S.armed = null; inboxDisable(); },
+    'inbox-test': () => inboxTest(),
+    'inbox-poll': () => inboxPoll(false),
+    'inbox-tab': () => { S.inboxTab = b.dataset.v; render(); },
+    'inbox-copy': () => { const v = inboxUrl(); navigator.clipboard.writeText(v).then(() => toast('주소를 복사했어요. 휴대폰 자동화에 붙여넣어 주세요')).catch(() => { const i = $('#inbox-url'); if (i) { i.focus(); i.select(); } toast('주소를 선택했어요. 복사해서 쓰세요'); }); },
     'brk-open': () => openBrokerGuide(b.dataset.id),
     'brk-sim': () => brokerSimulate(b.dataset.id),
     'dlg-close': () => closeBrokerGuide(),
@@ -1725,7 +1838,9 @@ window.addEventListener('hashchange', () => { if (location.hash.startsWith('#syn
 function init() {
   loadWS(LS.get(K('ws'), 'sample') === 'mine' ? 'mine' : 'sample');
   const h = location.hash.slice(1); S.tab = VIEWS.includes(h) ? h : 'home';
-  render(); maybeAutoFx(); syncInit(); loadBrokers();
+  render(); maybeAutoFx(); syncInit().then(() => inboxPoll()); loadBrokers();
+  setInterval(() => { if (document.visibilityState !== 'hidden') inboxPoll(); }, 3 * 60 * 1000);
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') inboxPoll(); });
 }
 if (!window.__MOA_TEST__) init();
 </script>

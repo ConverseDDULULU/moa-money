@@ -49,3 +49,7 @@
 | 토스증권 | 집 PC의 중계 프로그램(`toss-relay/`) | PC 웹 → Open API → Client ID·Secret, **집 PC IP 등록**, [toss-relay.zip](../../releases/latest/download/toss-relay.zip) 실행 |
 
 모듈 약속은 `household/brokers/README.md`에 있어요.
+
+## 고치는 사람에게
+
+앱 원본, 빌드 스크립트, 시험은 `source/`에 있어요. 고치는 법과 새 버전을 내보내는 순서는 `source/README.md`에 있어요.
